@@ -526,6 +526,7 @@ let srcImg = null;
 let cameraStream = null;
 let cameraFacing = 'environment';
 let pendingPdfUrl = null;
+let pendingPdfName = null;
 
 // ===================================================
 // ナビゲーション
@@ -957,12 +958,12 @@ async function downloadPdf() {
     const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
 
     if (isIOS) {
-      // 保存ガイドモーダルを表示
-      pendingPdfUrl = url;
+      // iOSはモーダルで手順を案内してから <a download> でダウンロード
+      pendingPdfUrl  = url;
+      pendingPdfName = fname;
       document.getElementById('save-modal-overlay').classList.add('show');
     } else {
-      const a = document.createElement('a');
-      a.href = url; a.download = fname; a.click();
+      triggerDownload(url, fname);
       showToast('PDFを保存しました ✓');
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     }
@@ -976,10 +977,20 @@ async function downloadPdf() {
 function openPdfUrl() {
   if (!pendingPdfUrl) return;
   document.getElementById('save-modal-overlay').classList.remove('show');
-  window.open(pendingPdfUrl, '_blank');
+  triggerDownload(pendingPdfUrl, pendingPdfName);
   setTimeout(() => {
     if (pendingPdfUrl) { URL.revokeObjectURL(pendingPdfUrl); pendingPdfUrl = null; }
+    pendingPdfName = null;
   }, 60000);
+}
+
+function triggerDownload(url, filename) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function closeSaveModal(e) {
