@@ -31,6 +31,7 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
+      min-height: 100dvh; /* [改善A-5] iOS Safari の動的ビューポート対応 */
       overflow-x: hidden;
     }
 
@@ -78,7 +79,9 @@
     /* ── ホーム ── */
     #screen-home {
       display: none; flex-direction: column; align-items: center; justify-content: center;
-      min-height: calc(100vh - 110px); padding: 40px 24px; text-align: center; gap: 32px;
+      min-height: calc(100vh - 110px);
+      min-height: calc(100dvh - 110px); /* [改善A-5] */
+      padding: 40px 24px; text-align: center; gap: 32px;
     }
     #screen-home.active { display: flex; }
     .home-icon { font-size: 72px; line-height: 1; }
@@ -130,7 +133,11 @@
 
     /* ── クロップ（パース補正） ── */
     #screen-crop { background: #000; }
-    #screen-crop.active { display: flex; flex-direction: column; min-height: calc(100vh - 110px); }
+    #screen-crop.active {
+      display: flex; flex-direction: column;
+      min-height: calc(100vh - 110px);
+      min-height: calc(100dvh - 110px); /* [改善A-5] */
+    }
     .crop-wrap {
       flex: 1; position: relative; overflow: hidden;
       min-height: 0; background: #000;
@@ -197,7 +204,11 @@
 
     /* ── 補正 ── */
     #screen-correct { background: #000; }
-    #screen-correct.active { display: flex; flex-direction: column; min-height: calc(100vh - 110px); }
+    #screen-correct.active {
+      display: flex; flex-direction: column;
+      min-height: calc(100vh - 110px);
+      min-height: calc(100dvh - 110px); /* [改善A-5] */
+    }
     .preview-wrap {
       flex: 1; display: flex; align-items: center; justify-content: center;
       overflow: hidden; background: #000; min-height: 0;
@@ -539,16 +550,20 @@
 // ===================================================
 // 状態管理
 // ===================================================
-let croppedDataUrl = null;
-let correctedDataUrl = null;
+// [改善A-1] DataURL依存を減らし、Canvas/Blob URL中心で保持する
+let croppedCanvas = null;
+let correctedCanvas = null;
 let srcImg = null;
 let cameraStream = null;
 let cameraFacing = 'environment';
 let pendingPdfUrl = null;
 let pendingPdfName = null;
 
+// [改善A-1] 一時的に作成した Object URL を管理
+const tempObjectUrls = new Set();
+
 // パース補正用状態
-let perspRawDataUrl = null;
+let perspRawSource = null;
 let perspRawImage = null;
 let perspRotation = 0;
 let perspFlipXState = false;
@@ -599,60 +614,137 @@ function goBack() {
 
 function goHome() {
   stopCamera();
-  perspRawDataUrl = null;
+
+  // [改善A-1] 生成した Object URL を解放
+  revokeAllTempObjectUrls();
+  if (pendingPdfUrl) {
+    URL.revokeObjectURL(pendingPdfUrl);
+    pendingPdfUrl = null;
+  }
+  pendingPdfName = null;
+
+  perspRawSource = null;
   perspRawImage = null;
   workingCanvas = null;
   perspCorners = [];
   activeDragCorner = -1;
-  croppedDataUrl = null;
-  correctedDataUrl = null;
+  croppedCanvas = null;
+  correctedCanvas = null;
   srcImg = null;
   document.getElementById('file-input').value = '';
   showScreen('home');
 }
 
 function backToCrop() {
-  if (perspRawDataUrl) {
-    initPerspective(perspRawDataUrl);
+  if (perspRawSource) {
+    initPerspective(perspRawSource);
   }
+}
+
+// ===================================================
+// 共通ユーティリティ
+// ===================================================
+
+// [改善A-1] Canvas -> Blob
+function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (!blob) reject(new Error('画像Blobの生成に失敗しました'));
+      else resolve(blob);
+    }, type, quality);
+  });
+}
+
+// [改善A-1] Object URL 管理
+function rememberObjectUrl(url) {
+  tempObjectUrls.add(url);
+  return url;
+}
+
+function revokeObjectUrl(url) {
+  if (!url) return;
+  if (tempObjectUrls.has(url)) {
+    URL.revokeObjectURL(url);
+    tempObjectUrls.delete(url);
+  }
+}
+
+function revokeAllTempObjectUrls() {
+  tempObjectUrls.forEach(url => URL.revokeObjectURL(url));
+  tempObjectUrls.clear();
+}
+
+// [改善A-2] 多重実行ガード
+let exclusiveRunning = false;
+async function runExclusive(fn) {
+  if (exclusiveRunning) return;
+  exclusiveRunning = true;
+  try {
+    return await fn();
+  } finally {
+    exclusiveRunning = false;
+  }
+}
+
+// [改善A-3] 画像ロード失敗時の onerror を追加
+function loadImageSource(source) {
+  return new Promise((resolve, reject) => {
+    if (source instanceof HTMLCanvasElement) {
+      resolve(source);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
+    img.src = source;
+  });
+}
+
+function getSourceWidth(src) {
+  return src.naturalWidth || src.videoWidth || src.width || 0;
+}
+function getSourceHeight(src) {
+  return src.naturalHeight || src.videoHeight || src.height || 0;
 }
 
 // ===================================================
 // カメラ（getUserMedia 最高画質）
 // ===================================================
 async function openCamera() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    openNativeCamera();
-    return;
-  }
+  await runExclusive(async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      openNativeCamera();
+      return;
+    }
 
-  try {
-    showLoading('カメラを起動中...');
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: cameraFacing },
-        width:  { ideal: 9999, min: 1280 },
-        height: { ideal: 9999, min: 720 },
-        frameRate: { ideal: 30 }
-      }
-    });
-    hideLoading();
-    cameraStream = stream;
-    const video = document.getElementById('camera-video');
-    video.srcObject = stream;
-    video.onloadedmetadata = () => {
-      const track = stream.getVideoTracks()[0];
-      const settings = track.getSettings();
-      const resText = settings.width && settings.height
-        ? `${settings.width} × ${settings.height}`
-        : '最高解像度';
-      document.getElementById('cam-res-info').textContent = resText;
-    };
-    document.getElementById('screen-camera').classList.add('active');
-  } catch (err) {
-    hideLoading();
-    openNativeCamera();
-  }
+    try {
+      showLoading('カメラを起動中...');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: cameraFacing },
+          width:  { ideal: 9999, min: 1280 },
+          height: { ideal: 9999, min: 720 },
+          frameRate: { ideal: 30 }
+        }
+      });
+      hideLoading();
+      cameraStream = stream;
+      const video = document.getElementById('camera-video');
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        const track = stream.getVideoTracks()[0];
+        const settings = track.getSettings();
+        const resText = settings.width && settings.height
+          ? `${settings.width} × ${settings.height}`
+          : '最高解像度';
+        document.getElementById('cam-res-info').textContent = resText;
+      };
+      document.getElementById('screen-camera').classList.add('active');
+    } catch (err) {
+      hideLoading();
+      openNativeCamera();
+    }
+  });
 }
 
 function openNativeCamera() {
@@ -662,24 +754,31 @@ function openNativeCamera() {
 }
 
 async function flipCamera() {
-  cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
-  stopCamera();
-  await openCamera();
+  await runExclusive(async () => {
+    cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+    stopCamera();
+    await openCamera();
+  });
 }
 
-function capturePhoto() {
-  const video = document.getElementById('camera-video');
-  if (!video.videoWidth) return;
+// [改善A-1] DataURLではなく Blob/Object URL を使う
+async function capturePhoto() {
+  await runExclusive(async () => {
+    const video = document.getElementById('camera-video');
+    if (!video.videoWidth) return;
 
-  const canvas = document.createElement('canvas');
-  canvas.width  = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0);
+    const canvas = document.createElement('canvas');
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
 
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.97);
-  stopCamera();
-  document.getElementById('screen-camera').classList.remove('active');
-  initPerspective(dataUrl);
+    const blob = await canvasToBlob(canvas, 'image/jpeg', 0.97);
+    const url = rememberObjectUrl(URL.createObjectURL(blob));
+
+    stopCamera();
+    document.getElementById('screen-camera').classList.remove('active');
+    initPerspective(url);
+  });
 }
 
 function cancelCamera() {
@@ -705,20 +804,20 @@ function openGallery() {
   inp.click();
 }
 
+// [改善A-1] FileReader(DataURL)ではなく Object URL を使う
 document.getElementById('file-input').addEventListener('change', function (e) {
   const file = e.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = ev => initPerspective(ev.target.result);
-  reader.readAsDataURL(file);
+  const url = rememberObjectUrl(URL.createObjectURL(file));
+  initPerspective(url);
   this.value = '';
 });
 
 // ===================================================
 // パース補正（台形補正）
 // ===================================================
-function initPerspective(dataUrl) {
-  perspRawDataUrl = dataUrl;
+function initPerspective(source) {
+  perspRawSource = source;
   perspRotation = 0;
   perspFlipXState = false;
   perspFlipYState = false;
@@ -726,8 +825,8 @@ function initPerspective(dataUrl) {
 
   showScreen('crop');
 
-  const img = new Image();
-  img.onload = () => {
+  // [改善A-3] onerror を追加
+  loadImageSource(source).then(img => {
     perspRawImage = img;
     requestAnimationFrame(() => {
       const wrap = document.getElementById('crop-wrap');
@@ -744,14 +843,17 @@ function initPerspective(dataUrl) {
         document.getElementById('ch-' + i).classList.add('visible');
       }
     });
-  };
-  img.src = dataUrl;
+  }).catch(err => {
+    showToast(err.message);
+    console.error(err);
+    goHome();
+  });
 }
 
 function rebuildWorkingCanvas() {
   if (!perspRawImage) return;
-  const iw = perspRawImage.naturalWidth;
-  const ih = perspRawImage.naturalHeight;
+  const iw = getSourceWidth(perspRawImage);
+  const ih = getSourceHeight(perspRawImage);
   const c = document.createElement('canvas');
   const ctx = c.getContext('2d');
 
@@ -996,22 +1098,24 @@ function sortCorners(pts) {
   return [tl, tr, br, bl];
 }
 
-function applyPerspective() {
-  if (!workingCanvas || perspCorners.length < 4) return;
+async function applyPerspective() {
+  await runExclusive(async () => {
+    if (!workingCanvas || perspCorners.length < 4) return;
 
-  // 有効な四角形チェック（面積が小さすぎないか）
-  let area = 0;
-  for (let i = 0; i < 4; i++) {
-    const j = (i + 1) % 4;
-    area += perspCorners[i].x * perspCorners[j].y - perspCorners[j].x * perspCorners[i].y;
-  }
-  if (Math.abs(area) < 500) {
-    showToast('四隅のハンドルを書類の角に合わせてください');
-    return;
-  }
+    // 有効な四角形チェック（面積が小さすぎないか）
+    let area = 0;
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      area += perspCorners[i].x * perspCorners[j].y - perspCorners[j].x * perspCorners[i].y;
+    }
+    if (Math.abs(area) < 500) {
+      showToast('四隅のハンドルを書類の角に合わせてください');
+      return;
+    }
 
-  showLoading('台形補正中...');
-  setTimeout(() => {
+    showLoading('台形補正中...');
+    await new Promise(r => setTimeout(r, 50));
+
     try {
       // キャンバス座標 → 画像座標に変換
       const toImgScale = workingCanvas.width / perspImgRect.w;
@@ -1039,16 +1143,16 @@ function applyPerspective() {
         outH = Math.round(outH * s);
       }
 
-      const resultCanvas = perspectiveWarp(workingCanvas, srcPts, outW, outH);
-      croppedDataUrl = resultCanvas.toDataURL('image/jpeg', 0.97);
+      // [改善A-1] 中間結果は Canvas のまま保持
+      croppedCanvas = perspectiveWarp(workingCanvas, srcPts, outW, outH);
       hideLoading();
-      initCorrection(croppedDataUrl);
+      initCorrection(croppedCanvas);
     } catch (err) {
       hideLoading();
       showToast('エラー: ' + err.message);
       console.error(err);
     }
-  }, 50);
+  });
 }
 
 // ===================================================
@@ -1069,24 +1173,38 @@ function computeHomography(src, dst) {
   return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
 }
 
+// [改善A-4] 特異行列時に明示的に例外を投げるよう強化
 function solveLinear8(A, b) {
   const n = 8;
   const M = A.map((row, i) => [...row, b[i]]);
+
   for (let col = 0; col < n; col++) {
     let maxR = col;
     for (let r = col + 1; r < n; r++) {
       if (Math.abs(M[r][col]) > Math.abs(M[maxR][col])) maxR = r;
     }
+
     [M[col], M[maxR]] = [M[maxR], M[col]];
     const pivot = M[col][col];
-    if (Math.abs(pivot) < 1e-10) continue;
+
+    if (!Number.isFinite(pivot) || Math.abs(pivot) < 1e-10) {
+      throw new Error('補正枠の形状が不正です');
+    }
+
+    for (let j = col; j <= n; j++) {
+      M[col][j] /= pivot;
+    }
+
     for (let r = 0; r < n; r++) {
       if (r === col) continue;
-      const f = M[r][col] / pivot;
-      for (let j = col; j <= n; j++) M[r][j] -= f * M[col][j];
+      const f = M[r][col];
+      for (let j = col; j <= n; j++) {
+        M[r][j] -= f * M[col][j];
+      }
     }
   }
-  return M.map((row, i) => row[n] / row[i]);
+
+  return M.map(row => row[n]);
 }
 
 function perspectiveWarp(srcCanvas, srcPts, outW, outH) {
@@ -1166,17 +1284,20 @@ function perspectiveWarp(srcCanvas, srcPts, outW, outH) {
 // ===================================================
 // 補正スクリーン
 // ===================================================
-function initCorrection(dataSrc) {
+function initCorrection(source) {
   resetSliders();
   setPreset(null);
   showScreen('correct');
 
-  const img = new Image();
-  img.onload = () => {
+  // [改善A-3] onerror付きロード関数を利用
+  loadImageSource(source).then(img => {
     srcImg = img;
     renderPreview();
-  };
-  img.src = dataSrc;
+  }).catch(err => {
+    showToast(err.message);
+    console.error(err);
+    goHome();
+  });
 }
 
 function resetSliders() {
@@ -1202,10 +1323,10 @@ function sliderChange() {
 
 function getSliderValues() {
   return {
-    brightness: parseInt(document.getElementById('sl-brightness').value) / 100,
-    contrast:   parseInt(document.getElementById('sl-contrast').value) / 100,
-    sharpen:    parseInt(document.getElementById('sl-sharpen').value) / 100,
-    grayscale:  parseInt(document.getElementById('sl-grayscale').value) / 100,
+    brightness: parseInt(document.getElementById('sl-brightness').value, 10) / 100,
+    contrast:   parseInt(document.getElementById('sl-contrast').value, 10) / 100,
+    sharpen:    parseInt(document.getElementById('sl-sharpen').value, 10) / 100,
+    grayscale:  parseInt(document.getElementById('sl-grayscale').value, 10) / 100,
   };
 }
 
@@ -1213,9 +1334,11 @@ function renderPreview() {
   if (!srcImg) return;
   const v = getSliderValues();
   const canvas = document.getElementById('correct-canvas');
+  const srcW = getSourceWidth(srcImg);
+  const srcH = getSourceHeight(srcImg);
   const maxW = window.innerWidth;
-  const ratio = srcImg.naturalWidth / srcImg.naturalHeight;
-  const w = Math.min(maxW, srcImg.naturalWidth);
+  const ratio = srcW / srcH;
+  const w = Math.min(maxW, srcW);
   const h = Math.round(w / ratio);
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
@@ -1275,125 +1398,132 @@ function setPreset(name) {
 // ===================================================
 // PDF スクリーン
 // ===================================================
-function goToPdf() {
-  if (!srcImg) return;
-  showLoading('画像を生成中...');
-  setTimeout(() => {
-    const v = getSliderValues();
-    const canvas = document.createElement('canvas');
-    canvas.width  = srcImg.naturalWidth;
-    canvas.height = srcImg.naturalHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.filter = `brightness(${v.brightness}) contrast(${v.contrast}) grayscale(${v.grayscale})`;
-    ctx.drawImage(srcImg, 0, 0);
-    ctx.filter = 'none';
-    if (v.sharpen > 0) {
-      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const sh = unsharpMask(id, v.sharpen * 0.3);
-      ctx.putImageData(sh, 0, 0);
+async function goToPdf() {
+  await runExclusive(async () => {
+    if (!srcImg) return;
+    showLoading('画像を生成中...');
+    await new Promise(r => setTimeout(r, 50));
+
+    try {
+      const v = getSliderValues();
+      const canvas = document.createElement('canvas');
+      canvas.width  = getSourceWidth(srcImg);
+      canvas.height = getSourceHeight(srcImg);
+      const ctx = canvas.getContext('2d');
+      ctx.filter = `brightness(${v.brightness}) contrast(${v.contrast}) grayscale(${v.grayscale})`;
+      ctx.drawImage(srcImg, 0, 0);
+      ctx.filter = 'none';
+      if (v.sharpen > 0) {
+        const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const sh = unsharpMask(id, v.sharpen * 0.3);
+        ctx.putImageData(sh, 0, 0);
+      }
+
+      // [改善A-1] 中間結果は Canvas のまま保持
+      correctedCanvas = canvas;
+
+      hideLoading();
+      showScreen('pdf');
+      drawPdfPreview();
+    } catch (err) {
+      hideLoading();
+      showToast('エラー: ' + err.message);
+      console.error(err);
     }
-    correctedDataUrl = canvas.toDataURL('image/jpeg', 0.97);
-    hideLoading();
-    showScreen('pdf');
-    drawPdfPreview();
-  }, 50);
+  });
 }
 
 function drawPdfPreview() {
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.getElementById('pdf-preview-canvas');
-    const maxW = document.querySelector('.pdf-preview-card').clientWidth - 28;
-    const ratio = img.naturalWidth / img.naturalHeight;
-    const w = Math.min(maxW, img.naturalWidth);
-    canvas.width = w; canvas.height = Math.round(w / ratio);
-    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-  };
-  img.src = correctedDataUrl;
+  if (!correctedCanvas) return;
+  const canvas = document.getElementById('pdf-preview-canvas');
+  const maxW = document.querySelector('.pdf-preview-card').clientWidth - 28;
+  const ratio = correctedCanvas.width / correctedCanvas.height;
+  const w = Math.min(maxW, correctedCanvas.width);
+  canvas.width = w;
+  canvas.height = Math.round(w / ratio);
+  canvas.getContext('2d').drawImage(correctedCanvas, 0, 0, canvas.width, canvas.height);
 }
 
 // ===================================================
 // PDF生成・保存
 // ===================================================
 async function downloadPdf() {
-  if (!correctedDataUrl) return;
-  const { jsPDF } = window.jspdf;
-  const paper   = document.getElementById('set-paper').value;
-  const orient  = document.getElementById('set-orient').value;
-  const margin  = parseInt(document.getElementById('set-margin').value);
-  const quality = parseFloat(document.getElementById('set-quality').value);
+  await runExclusive(async () => {
+    if (!correctedCanvas) return;
+    const { jsPDF } = window.jspdf;
+    const paper   = document.getElementById('set-paper').value;
+    const orient  = document.getElementById('set-orient').value;
+    const margin  = parseInt(document.getElementById('set-margin').value, 10);
+    const quality = parseFloat(document.getElementById('set-quality').value);
 
-  showLoading('PDF生成中...');
-  await new Promise(r => setTimeout(r, 80));
+    showLoading('PDF生成中...');
+    await new Promise(r => setTimeout(r, 80));
 
-  try {
-    const img = new Image();
-    img.src = correctedDataUrl;
-    await new Promise(r => { img.onload = r; });
+    try {
+      const imgW = correctedCanvas.width;
+      const imgH = correctedCanvas.height;
 
-    const sizes = { a4: [210, 297], a5: [148, 210], letter: [216, 279] };
-    let pw, ph;
-    if (paper === 'custom') {
-      pw = Math.min(img.naturalWidth * 0.2646, 297);
-      ph = pw * img.naturalHeight / img.naturalWidth;
-    } else {
-      [pw, ph] = sizes[paper];
+      const sizes = { a4: [210, 297], a5: [148, 210], letter: [216, 279] };
+      let pw, ph;
+      if (paper === 'custom') {
+        pw = Math.min(imgW * 0.2646, 297);
+        ph = pw * imgH / imgW;
+      } else {
+        [pw, ph] = sizes[paper];
+      }
+
+      let finalW = pw, finalH = ph;
+      if (orient === 'landscape' && paper !== 'custom') {
+        finalW = Math.max(pw, ph); finalH = Math.min(pw, ph);
+      }
+
+      const pdf = new jsPDF({
+        orientation: finalW >= finalH ? 'landscape' : 'portrait',
+        unit: 'mm',
+        format: paper === 'custom' ? [finalW, finalH] : paper,
+      });
+
+      if (paper !== 'custom') {
+        finalW = pdf.internal.pageSize.getWidth();
+        finalH = pdf.internal.pageSize.getHeight();
+      }
+
+      const avW = finalW - margin * 2;
+      const avH = finalH - margin * 2;
+      const imgRatio = imgW / imgH;
+      let dw, dh;
+      if (imgRatio > avW / avH) { dw = avW; dh = avW / imgRatio; }
+      else { dh = avH; dw = avH * imgRatio; }
+      const dx = margin + (avW - dw) / 2;
+      const dy = margin + (avH - dh) / 2;
+
+      // [改善A-1] 直前まで Canvas を維持し、最終出力時のみ DataURL 化
+      const imgData = correctedCanvas.toDataURL('image/jpeg', quality);
+      pdf.addImage(imgData, 'JPEG', dx, dy, dw, dh);
+
+      const fname = getNextFilename();
+      hideLoading();
+
+      const blob = pdf.output('blob');
+      const url  = URL.createObjectURL(blob);
+      const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
+
+      if (isIOS) {
+        if (pendingPdfUrl) URL.revokeObjectURL(pendingPdfUrl);
+        pendingPdfUrl  = url;
+        pendingPdfName = fname;
+        document.getElementById('save-modal-overlay').classList.add('show');
+      } else {
+        triggerDownload(url, fname);
+        showToast('PDFを保存しました ✓');
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      }
+    } catch (err) {
+      hideLoading();
+      showToast('エラー: ' + err.message);
+      console.error(err);
     }
-
-    let finalW = pw, finalH = ph;
-    if (orient === 'landscape' && paper !== 'custom') {
-      finalW = Math.max(pw, ph); finalH = Math.min(pw, ph);
-    }
-
-    const pdf = new jsPDF({
-      orientation: finalW >= finalH ? 'landscape' : 'portrait',
-      unit: 'mm',
-      format: paper === 'custom' ? [finalW, finalH] : paper,
-    });
-
-    if (paper !== 'custom') {
-      finalW = pdf.internal.pageSize.getWidth();
-      finalH = pdf.internal.pageSize.getHeight();
-    }
-
-    const avW = finalW - margin * 2;
-    const avH = finalH - margin * 2;
-    const imgRatio = img.naturalWidth / img.naturalHeight;
-    let dw, dh;
-    if (imgRatio > avW / avH) { dw = avW; dh = avW / imgRatio; }
-    else { dh = avH; dw = avH * imgRatio; }
-    const dx = margin + (avW - dw) / 2;
-    const dy = margin + (avH - dh) / 2;
-
-    const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width  = img.naturalWidth;
-    tmpCanvas.height = img.naturalHeight;
-    tmpCanvas.getContext('2d').drawImage(img, 0, 0);
-    const imgData = tmpCanvas.toDataURL('image/jpeg', quality);
-
-    pdf.addImage(imgData, 'JPEG', dx, dy, dw, dh);
-
-    const fname = getNextFilename();
-    hideLoading();
-
-    const blob = pdf.output('blob');
-    const url  = URL.createObjectURL(blob);
-    const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
-
-    if (isIOS) {
-      pendingPdfUrl  = url;
-      pendingPdfName = fname;
-      document.getElementById('save-modal-overlay').classList.add('show');
-    } else {
-      triggerDownload(url, fname);
-      showToast('PDFを保存しました ✓');
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-    }
-  } catch (err) {
-    hideLoading();
-    showToast('エラー: ' + err.message);
-    console.error(err);
-  }
+  });
 }
 
 function openPdfUrl() {
