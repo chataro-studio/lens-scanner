@@ -558,6 +558,14 @@ let perspCorners = [];
 let perspImgRect = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
 let activeDragCorner = -1;
 
+// ハンドルを角から外側へオフセットする方向（TL/TR/BR/BL）
+const HANDLE_OFFSETS = [
+  { x: -40, y: -40 },
+  { x:  40, y: -40 },
+  { x:  40, y:  40 },
+  { x: -40, y:  40 },
+];
+
 // ===================================================
 // ナビゲーション
 // ===================================================
@@ -816,6 +824,27 @@ function redrawPerspView() {
     ctx.lineTo(perspCorners[3].x, perspCorners[3].y);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // 6. ハンドル（オフセット位置）と実際の角を結ぶ線
+    ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    for (let i = 0; i < 4; i++) {
+      const c = perspCorners[i];
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(c.x + HANDLE_OFFSETS[i].x, c.y + HANDLE_OFFSETS[i].y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // 7. 実際の角に小さな点を表示
+    ctx.fillStyle = '#007aff';
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.arc(perspCorners[i].x, perspCorners[i].y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   updateHandlePositions();
@@ -835,15 +864,19 @@ function initDefaultCorners() {
 function updateHandlePositions() {
   perspCorners.forEach((c, i) => {
     const h = document.getElementById('ch-' + i);
-    if (h) { h.style.left = c.x + 'px'; h.style.top = c.y + 'px'; }
+    if (h) {
+      h.style.left = (c.x + HANDLE_OFFSETS[i].x) + 'px';
+      h.style.top  = (c.y + HANDLE_OFFSETS[i].y) + 'px';
+    }
   });
 }
 
-function moveCorner(idx, x, y) {
+function moveCorner(idx, touchX, touchY) {
   const canvas = document.getElementById('perspective-canvas');
+  // タッチ位置からオフセット分を引いた位置が実際の角
   perspCorners[idx] = {
-    x: Math.max(0, Math.min(canvas.width, x)),
-    y: Math.max(0, Math.min(canvas.height, y)),
+    x: Math.max(0, Math.min(canvas.width,  touchX - HANDLE_OFFSETS[idx].x)),
+    y: Math.max(0, Math.min(canvas.height, touchY - HANDLE_OFFSETS[idx].y)),
   };
   updateHandlePositions();
   redrawPerspView();
