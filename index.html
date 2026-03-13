@@ -142,8 +142,8 @@
     .corner-handle {
       position: absolute;
       width: 48px; height: 48px;
-      background: #007aff;
-      border: 3px solid #fff;
+      background: rgba(0,122,255,0.6);
+      border: 2.5px solid rgba(255,255,255,0.9);
       border-radius: 50%;
       transform: translate(-50%, -50%);
       box-shadow: 0 2px 10px rgba(0,0,0,0.5);
@@ -151,8 +151,26 @@
       cursor: grab;
       z-index: 10;
       display: none;
+      transition: background 0.15s, transform 0.1s;
     }
+    /* 十字線（::before = 縦、::after = 横） */
+    .corner-handle::before,
+    .corner-handle::after {
+      content: '';
+      position: absolute;
+      background: rgba(255,255,255,0.9);
+      border-radius: 1px;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .corner-handle::before { width: 2px; height: 14px; }
+    .corner-handle::after  { width: 14px; height: 2px; }
     .corner-handle.visible { display: block; }
+    .corner-handle.dragging {
+      background: rgba(0,122,255,0.92);
+      transform: translate(-50%, -50%) scale(1.18);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    }
     .crop-ctrl {
       background: #1c1c1e; padding: 14px 16px;
       padding-bottom: calc(14px + env(safe-area-inset-bottom));
@@ -837,6 +855,7 @@ function moveCorner(idx, x, y) {
         e.preventDefault();
         e.stopPropagation();
         activeDragCorner = idx;
+        document.getElementById('ch-' + idx).classList.add('dragging');
       };
     })(i), { passive: false });
 
@@ -844,6 +863,7 @@ function moveCorner(idx, x, y) {
       return function(e) {
         e.preventDefault();
         activeDragCorner = idx;
+        document.getElementById('ch-' + idx).classList.add('dragging');
       };
     })(i));
   }
@@ -865,7 +885,12 @@ function moveCorner(idx, x, y) {
     moveCorner(activeDragCorner, e.clientX - rect.left, e.clientY - rect.top);
   });
 
-  const endDrag = function() { activeDragCorner = -1; };
+  const endDrag = function() {
+    if (activeDragCorner >= 0) {
+      document.getElementById('ch-' + activeDragCorner).classList.remove('dragging');
+    }
+    activeDragCorner = -1;
+  };
   wrap.addEventListener('touchend', endDrag);
   wrap.addEventListener('touchcancel', endDrag);
   document.addEventListener('mouseup', endDrag);
