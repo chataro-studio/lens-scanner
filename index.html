@@ -934,6 +934,17 @@ function doPerspReset() {
   redrawPerspView();
 }
 
+// 4点を「左上・右上・右下・左下」の順に並び替える
+function sortCorners(pts) {
+  // x+y が最小 → 左上、最大 → 右下
+  // x-y が最大 → 右上、最小 → 左下
+  const tl = pts.reduce((a, b) => (a.x + a.y < b.x + b.y ? a : b));
+  const br = pts.reduce((a, b) => (a.x + a.y > b.x + b.y ? a : b));
+  const tr = pts.reduce((a, b) => (a.x - a.y > b.x - b.y ? a : b));
+  const bl = pts.reduce((a, b) => (a.x - a.y < b.x - b.y ? a : b));
+  return [tl, tr, br, bl];
+}
+
 function applyPerspective() {
   if (!workingCanvas || perspCorners.length < 4) return;
 
@@ -953,10 +964,13 @@ function applyPerspective() {
     try {
       // キャンバス座標 → 画像座標に変換
       const toImgScale = workingCanvas.width / perspImgRect.w;
-      const srcPts = perspCorners.map(c => ({
+      const rawPts = perspCorners.map(c => ({
         x: (c.x - perspImgRect.x) * toImgScale,
         y: (c.y - perspImgRect.y) * toImgScale,
       }));
+
+      // ドラッグで順序が崩れていても「左上・右上・右下・左下」に並び替える
+      const srcPts = sortCorners(rawPts);
 
       // 出力サイズを計算（各辺の平均）
       const topW   = Math.hypot(srcPts[1].x - srcPts[0].x, srcPts[1].y - srcPts[0].y);
