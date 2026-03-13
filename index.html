@@ -148,6 +148,18 @@
       border-radius: 10px; padding: 9px 14px; font-size: 13px; cursor: pointer;
       display: flex; align-items: center; gap: 5px;
     }
+    .mode-toggle {
+      display: flex; gap: 6px; margin-bottom: 12px;
+    }
+    .mode-btn {
+      flex: 1; padding: 9px 8px; border: none; border-radius: 10px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.5);
+      transition: background 0.15s, color 0.15s;
+    }
+    .mode-btn.active {
+      background: var(--blue); color: #fff;
+    }
     .row2 { display: flex; gap: 10px; }
     .btn-dark { background: rgba(255,255,255,0.15); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer; flex: 1; }
     .btn-confirm { background: var(--blue); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer; flex: 2; }
@@ -358,6 +370,10 @@
     <img id="crop-img" alt="切り抜き対象">
   </div>
   <div class="crop-ctrl">
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="mode-move" onclick="setCropMode('move')">🖐 画像を動かす</button>
+      <button class="mode-btn" id="mode-crop" onclick="setCropMode('crop')">✂️ 枠を調整</button>
+    </div>
     <div class="icon-btns">
       <button class="icon-btn" onclick="cropRotate(-90)">↺ 左回転</button>
       <button class="icon-btn" onclick="cropRotate(90)">↻ 右回転</button>
@@ -663,9 +679,12 @@ function initCropper(dataSrc) {
   showScreen('crop');
   img.src = dataSrc;
   img.onload = function () {
+    // モードボタンを初期状態にリセット
+    document.getElementById('mode-move').classList.add('active');
+    document.getElementById('mode-crop').classList.remove('active');
     cropper = new Cropper(img, {
       viewMode: 1,
-      dragMode: 'crop',
+      dragMode: 'move',   // 初期は画像を動かすモード
       autoCropArea: 0.88,
       guides: true,
       center: true,
@@ -673,6 +692,9 @@ function initCropper(dataSrc) {
       cropBoxMovable: true,
       cropBoxResizable: true,
       toggleDragModeOnDblclick: false,
+      zoomable: true,
+      zoomOnWheel: true,
+      wheelZoomRatio: 0.1,
     });
   };
 }
@@ -692,6 +714,13 @@ function cropFlipY() {
 function cropReset() {
   flipX = 1; flipY = 1;
   cropper && cropper.reset();
+}
+
+function setCropMode(mode) {
+  if (!cropper) return;
+  cropper.setDragMode(mode);
+  document.getElementById('mode-move').classList.toggle('active', mode === 'move');
+  document.getElementById('mode-crop').classList.toggle('active', mode === 'crop');
 }
 
 function applyCrop() {
@@ -919,8 +948,7 @@ async function downloadPdf() {
 
     pdf.addImage(imgData, 'JPEG', dx, dy, dw, dh);
 
-    const d = new Date();
-    const fname = `新聞_${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}_${pad2(d.getHours())}${pad2(d.getMinutes())}.pdf`;
+    const fname = getNextFilename();
 
     hideLoading();
 
@@ -960,6 +988,16 @@ function closeSaveModal(e) {
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
+
+function getNextFilename() {
+  const d = new Date();
+  const dateStr = `${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}`;
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem('scanCounter') || '{}'); } catch(e) {}
+  const counter = stored.date === dateStr ? (stored.counter || 0) + 1 : 1;
+  localStorage.setItem('scanCounter', JSON.stringify({ date: dateStr, counter }));
+  return `scan_${dateStr}_${String(counter).padStart(4, '0')}.pdf`;
+}
 
 // ===================================================
 // ユーティリティ
