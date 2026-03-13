@@ -92,6 +92,41 @@
     .btn-blue { background: var(--blue); color: #fff; }
     .btn-outline { background: var(--card); color: var(--blue); border: 2px solid var(--blue); }
 
+    /* ── カメラ ── */
+    #screen-camera {
+      display: none; position: fixed; inset: 0; background: #000; z-index: 300;
+      flex-direction: column;
+    }
+    #screen-camera.active { display: flex; }
+    #camera-video {
+      flex: 1; width: 100%; height: 100%; object-fit: cover;
+      display: block;
+    }
+    .camera-ctrl {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.55);
+      padding: 24px 40px;
+      padding-bottom: calc(24px + env(safe-area-inset-bottom));
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .cam-btn-side {
+      width: 52px; height: 52px; border-radius: 50%; border: none;
+      background: rgba(255,255,255,0.2); color: #fff;
+      font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .cam-btn-capture {
+      width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff;
+      background: rgba(255,255,255,0.9); cursor: pointer;
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.3);
+      transition: transform 0.1s;
+    }
+    .cam-btn-capture:active { transform: scale(0.93); }
+    .cam-zoom-info {
+      position: absolute; top: calc(env(safe-area-inset-top) + 16px); left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.5); color: #fff; font-size: 12px;
+      padding: 5px 12px; border-radius: 12px; white-space: nowrap;
+    }
+
     /* ── クロップ ── */
     #screen-crop { background: #000; }
     #screen-crop.active { display: flex; flex-direction: column; min-height: calc(100vh - 110px); }
@@ -183,9 +218,59 @@
       width: 100%; padding: 14px; background: var(--card); color: var(--subtext);
       border: 1px solid var(--border); border-radius: 14px; font-size: 15px; cursor: pointer;
     }
-    .ios-note {
-      text-align: center; font-size: 12px; color: var(--subtext);
-      margin-top: 12px; line-height: 1.6; padding: 0 8px;
+
+    /* ── PDF保存モーダル ── */
+    #save-modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45); z-index: 800;
+      align-items: flex-end; justify-content: center;
+    }
+    #save-modal-overlay.show { display: flex; }
+    #save-modal {
+      background: var(--card); border-radius: 22px 22px 0 0;
+      width: 100%; max-width: 500px;
+      padding: 20px 24px;
+      padding-bottom: calc(20px + env(safe-area-inset-bottom));
+      animation: slideUp 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .modal-handle {
+      width: 40px; height: 4px; background: var(--border);
+      border-radius: 2px; margin: 0 auto 18px;
+    }
+    .modal-title {
+      font-size: 18px; font-weight: 700; text-align: center; margin-bottom: 6px;
+    }
+    .modal-sub {
+      font-size: 13px; color: var(--subtext); text-align: center; margin-bottom: 22px;
+    }
+    .save-steps {
+      display: flex; flex-direction: column; gap: 14px; margin-bottom: 24px;
+    }
+    .save-step {
+      display: flex; align-items: flex-start; gap: 14px;
+      background: var(--bg); border-radius: 14px; padding: 14px;
+    }
+    .save-step-num {
+      width: 30px; height: 30px; border-radius: 50%; background: var(--blue); color: #fff;
+      font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .save-step-body { flex: 1; }
+    .save-step-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+    .save-step-desc { font-size: 12px; color: var(--subtext); line-height: 1.5; }
+    .save-step-icon {
+      font-size: 26px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-open-btn {
+      width: 100%; padding: 17px; background: var(--blue); color: #fff;
+      border: none; border-radius: 14px; font-size: 17px; font-weight: 700;
+      cursor: pointer; margin-bottom: 10px;
+    }
+    .modal-cancel-btn {
+      width: 100%; padding: 13px; background: none; color: var(--subtext);
+      border: none; font-size: 15px; cursor: pointer;
     }
 
     /* ── トースト ── */
@@ -253,6 +338,17 @@
     <button class="btn-main btn-outline" onclick="openGallery()">
       🖼️ アルバムから選択
     </button>
+  </div>
+</div>
+
+<!-- ■ カメラスクリーン（フルスクリーン） -->
+<div id="screen-camera">
+  <video id="camera-video" autoplay playsinline muted></video>
+  <div class="cam-zoom-info" id="cam-res-info">カメラ起動中...</div>
+  <div class="camera-ctrl">
+    <button class="cam-btn-side" onclick="cancelCamera()" title="キャンセル">✕</button>
+    <button class="cam-btn-capture" onclick="capturePhoto()" title="撮影"></button>
+    <button class="cam-btn-side" onclick="flipCamera()" title="カメラ切替">🔄</button>
   </div>
 </div>
 
@@ -358,13 +454,48 @@
   </div>
 
   <button class="dl-btn" onclick="downloadPdf()">
-    📄 PDFを保存 / 共有
+    📄 PDFを保存する
   </button>
   <button class="restart-btn" onclick="goHome()">最初からやり直す</button>
-  <p class="ios-note">
-    iPhoneでは、PDFが表示されたら<br>
-    画面下の「共有」ボタン →「ファイルに保存」で保存できます
-  </p>
+</div>
+
+<!-- ■ PDF保存ガイドモーダル -->
+<div id="save-modal-overlay" onclick="closeSaveModal(event)">
+  <div id="save-modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📱 iPhoneへの保存方法</div>
+    <div class="modal-sub">「PDFを開く」をタップした後、以下の手順で保存できます</div>
+    <div class="save-steps">
+      <div class="save-step">
+        <div class="save-step-num">1</div>
+        <div class="save-step-body">
+          <div class="save-step-title">PDFが開いたら「共有」ボタンをタップ</div>
+          <div class="save-step-desc">画面下中央にある □↑ のアイコンをタップしてください</div>
+        </div>
+        <div class="save-step-icon">□↑</div>
+      </div>
+      <div class="save-step">
+        <div class="save-step-num">2</div>
+        <div class="save-step-body">
+          <div class="save-step-title">「ファイルに保存」を選択</div>
+          <div class="save-step-desc">共有メニューをスクロールして「ファイルに保存」をタップ</div>
+        </div>
+        <div class="save-step-icon">📁</div>
+      </div>
+      <div class="save-step">
+        <div class="save-step-num">3</div>
+        <div class="save-step-body">
+          <div class="save-step-title">保存先を選んで「追加」をタップ</div>
+          <div class="save-step-desc">「iCloud Drive」や「このiPhone内」などを選んで完了</div>
+        </div>
+        <div class="save-step-icon">✅</div>
+      </div>
+    </div>
+    <button class="modal-open-btn" id="modal-open-btn" onclick="openPdfUrl()">
+      📄 PDFを開く
+    </button>
+    <button class="modal-cancel-btn" onclick="closeSaveModal()">キャンセル</button>
+  </div>
 </div>
 
 <script>
@@ -373,9 +504,12 @@
 // ===================================================
 let cropper = null;
 let flipX = 1, flipY = 1;
-let croppedDataUrl = null;   // crop後のdataURL
-let correctedDataUrl = null; // correction後のdataURL
-let srcImg = null;           // 補正用の元画像要素
+let croppedDataUrl = null;
+let correctedDataUrl = null;
+let srcImg = null;
+let cameraStream = null;
+let cameraFacing = 'environment';
+let pendingPdfUrl = null;
 
 // ===================================================
 // ナビゲーション
@@ -386,7 +520,7 @@ function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + id).classList.add('active');
 
-  const idx = STEP_ORDER.indexOf(id) + 1; // 1-based
+  const idx = STEP_ORDER.indexOf(id) + 1;
   for (let i = 1; i <= 4; i++) {
     const el = document.getElementById('step-' + i);
     el.classList.remove('active', 'done');
@@ -409,6 +543,7 @@ function goBack() {
 
 function goHome() {
   if (cropper) { cropper.destroy(); cropper = null; }
+  stopCamera();
   flipX = 1; flipY = 1;
   croppedDataUrl = null;
   correctedDataUrl = null;
@@ -418,14 +553,90 @@ function goHome() {
 }
 
 // ===================================================
-// ファイル選択
+// カメラ（getUserMedia 最高画質）
 // ===================================================
-function openCamera() {
+async function openCamera() {
+  // getUserMedia が使えるか確認
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    // フォールバック: ネイティブカメラ起動
+    openNativeCamera();
+    return;
+  }
+
+  try {
+    showLoading('カメラを起動中...');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: cameraFacing },
+        width:  { ideal: 9999, min: 1280 },
+        height: { ideal: 9999, min: 720 },
+        frameRate: { ideal: 30 }
+      }
+    });
+    hideLoading();
+    cameraStream = stream;
+    const video = document.getElementById('camera-video');
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
+      const resText = settings.width && settings.height
+        ? `${settings.width} × ${settings.height}`
+        : '最高解像度';
+      document.getElementById('cam-res-info').textContent = resText;
+    };
+    document.getElementById('screen-camera').classList.add('active');
+  } catch (err) {
+    hideLoading();
+    console.warn('getUserMedia失敗、ネイティブカメラに切り替え:', err);
+    openNativeCamera();
+  }
+}
+
+function openNativeCamera() {
   const inp = document.getElementById('file-input');
   inp.setAttribute('capture', 'environment');
   inp.click();
 }
 
+async function flipCamera() {
+  cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+  stopCamera();
+  await openCamera();
+}
+
+function capturePhoto() {
+  const video = document.getElementById('camera-video');
+  if (!video.videoWidth) return;
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.97);
+  stopCamera();
+  document.getElementById('screen-camera').classList.remove('active');
+  initCropper(dataUrl);
+}
+
+function cancelCamera() {
+  stopCamera();
+  document.getElementById('screen-camera').classList.remove('active');
+}
+
+function stopCamera() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+  }
+  const video = document.getElementById('camera-video');
+  video.srcObject = null;
+}
+
+// ===================================================
+// ファイル選択（アルバム）
+// ===================================================
 function openGallery() {
   const inp = document.getElementById('file-input');
   inp.removeAttribute('capture');
@@ -462,7 +673,6 @@ function initCropper(dataSrc) {
       cropBoxMovable: true,
       cropBoxResizable: true,
       toggleDragModeOnDblclick: false,
-      ready() { /* ready */ }
     });
   };
 }
@@ -488,8 +698,9 @@ function applyCrop() {
   if (!cropper) return;
   showLoading('切り抜き中...');
   setTimeout(() => {
-    const canvas = cropper.getCroppedCanvas({ maxWidth: 4096, maxHeight: 4096, imageSmoothingQuality: 'high' });
-    croppedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    // サイズ上限なし・最高画質でクロップ
+    const canvas = cropper.getCroppedCanvas({ imageSmoothingQuality: 'high' });
+    croppedDataUrl = canvas.toDataURL('image/jpeg', 0.97);
     cropper.destroy(); cropper = null;
     hideLoading();
     initCorrection(croppedDataUrl);
@@ -536,9 +747,9 @@ function sliderChange() {
 function getSliderValues() {
   return {
     brightness: parseInt(document.getElementById('sl-brightness').value) / 100,
-    contrast: parseInt(document.getElementById('sl-contrast').value) / 100,
-    sharpen: parseInt(document.getElementById('sl-sharpen').value) / 100,
-    grayscale: parseInt(document.getElementById('sl-grayscale').value) / 100,
+    contrast:   parseInt(document.getElementById('sl-contrast').value) / 100,
+    sharpen:    parseInt(document.getElementById('sl-sharpen').value) / 100,
+    grayscale:  parseInt(document.getElementById('sl-grayscale').value) / 100,
   };
 }
 
@@ -566,7 +777,6 @@ function renderPreview() {
 function unsharpMask(imageData, k) {
   const { width, height, data } = imageData;
   const out = new Uint8ClampedArray(data.length);
-  // 境界をコピー
   out.set(data);
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
@@ -584,19 +794,19 @@ function unsharpMask(imageData, k) {
 
 // プリセット
 const PRESETS = {
-  original: { brightness: 100, contrast: 100, sharpen: 0, grayscale: 0 },
-  scan:     { brightness: 112, contrast: 135, sharpen: 35, grayscale: 0 },
+  original: { brightness: 100, contrast: 100, sharpen:  0, grayscale:   0 },
+  scan:     { brightness: 112, contrast: 135, sharpen: 35, grayscale:   0 },
   bw:       { brightness: 110, contrast: 145, sharpen: 25, grayscale: 100 },
-  enhance:  { brightness: 105, contrast: 155, sharpen: 55, grayscale: 0 },
+  enhance:  { brightness: 105, contrast: 155, sharpen: 55, grayscale:   0 },
 };
 
 function applyPreset(name) {
   const p = PRESETS[name];
   if (!p) return;
   document.getElementById('sl-brightness').value = p.brightness;
-  document.getElementById('sl-contrast').value = p.contrast;
-  document.getElementById('sl-sharpen').value = p.sharpen;
-  document.getElementById('sl-grayscale').value = p.grayscale;
+  document.getElementById('sl-contrast').value   = p.contrast;
+  document.getElementById('sl-sharpen').value    = p.sharpen;
+  document.getElementById('sl-grayscale').value  = p.grayscale;
   updateLabels();
   setPreset(name);
   renderPreview();
@@ -617,7 +827,7 @@ function goToPdf() {
   setTimeout(() => {
     const v = getSliderValues();
     const canvas = document.createElement('canvas');
-    canvas.width = srcImg.naturalWidth;
+    canvas.width  = srcImg.naturalWidth;
     canvas.height = srcImg.naturalHeight;
     const ctx = canvas.getContext('2d');
     ctx.filter = `brightness(${v.brightness}) contrast(${v.contrast}) grayscale(${v.grayscale})`;
@@ -628,7 +838,7 @@ function goToPdf() {
       const sh = unsharpMask(id, v.sharpen * 0.3);
       ctx.putImageData(sh, 0, 0);
     }
-    correctedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    correctedDataUrl = canvas.toDataURL('image/jpeg', 0.97);
     hideLoading();
     showScreen('pdf');
     drawPdfPreview();
@@ -649,14 +859,14 @@ function drawPdfPreview() {
 }
 
 // ===================================================
-// PDF生成・ダウンロード
+// PDF生成・保存
 // ===================================================
 async function downloadPdf() {
   if (!correctedDataUrl) return;
   const { jsPDF } = window.jspdf;
-  const paper = document.getElementById('set-paper').value;
-  const orient = document.getElementById('set-orient').value;
-  const margin = parseInt(document.getElementById('set-margin').value);
+  const paper   = document.getElementById('set-paper').value;
+  const orient  = document.getElementById('set-orient').value;
+  const margin  = parseInt(document.getElementById('set-margin').value);
   const quality = parseFloat(document.getElementById('set-quality').value);
 
   showLoading('PDF生成中...');
@@ -667,20 +877,15 @@ async function downloadPdf() {
     img.src = correctedDataUrl;
     await new Promise(r => { img.onload = r; });
 
-    // 用紙サイズ (mm)
     const sizes = { a4: [210, 297], a5: [148, 210], letter: [216, 279] };
-    let [pw, ph] = paper === 'custom'
-      ? [Math.min(img.naturalWidth * 0.2646, 297), img.naturalHeight * 0.2646 * (Math.min(img.naturalWidth * 0.2646, 297) / (img.naturalWidth * 0.2646))]
-      : sizes[paper];
-
-    // customの場合は画像比率で計算
+    let pw, ph;
     if (paper === 'custom') {
-      const mmW = Math.min(img.naturalWidth * 0.2646, 297); // max 297mm
-      const mmH = mmW * img.naturalHeight / img.naturalWidth;
-      pw = mmW; ph = mmH;
+      pw = Math.min(img.naturalWidth * 0.2646, 297);
+      ph = pw * img.naturalHeight / img.naturalWidth;
+    } else {
+      [pw, ph] = sizes[paper];
     }
 
-    // 横向き指定
     let finalW = pw, finalH = ph;
     if (orient === 'landscape' && paper !== 'custom') {
       finalW = Math.max(pw, ph); finalH = Math.min(pw, ph);
@@ -692,10 +897,7 @@ async function downloadPdf() {
       format: paper === 'custom' ? [finalW, finalH] : paper,
     });
 
-    if (paper !== 'custom' && orient === 'landscape') {
-      finalW = pdf.internal.pageSize.getWidth();
-      finalH = pdf.internal.pageSize.getHeight();
-    } else if (paper !== 'custom') {
+    if (paper !== 'custom') {
       finalW = pdf.internal.pageSize.getWidth();
       finalH = pdf.internal.pageSize.getHeight();
     }
@@ -709,38 +911,52 @@ async function downloadPdf() {
     const dx = margin + (avW - dw) / 2;
     const dy = margin + (avH - dh) / 2;
 
-    // 再エンコード
     const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width = img.naturalWidth; tmpCanvas.height = img.naturalHeight;
+    tmpCanvas.width  = img.naturalWidth;
+    tmpCanvas.height = img.naturalHeight;
     tmpCanvas.getContext('2d').drawImage(img, 0, 0);
     const imgData = tmpCanvas.toDataURL('image/jpeg', quality);
 
     pdf.addImage(imgData, 'JPEG', dx, dy, dw, dh);
 
-    // ファイル名
     const d = new Date();
     const fname = `新聞_${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}_${pad2(d.getHours())}${pad2(d.getMinutes())}.pdf`;
 
     hideLoading();
 
-    // iOS Safari対応: blobURLで新タブ表示
     const blob = pdf.output('blob');
-    const url = URL.createObjectURL(blob);
+    const url  = URL.createObjectURL(blob);
     const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
+
     if (isIOS) {
-      window.open(url, '_blank');
-      showToast('PDFを開きました。共有ボタンから保存してください ✓');
+      // 保存ガイドモーダルを表示
+      pendingPdfUrl = url;
+      document.getElementById('save-modal-overlay').classList.add('show');
     } else {
       const a = document.createElement('a');
       a.href = url; a.download = fname; a.click();
       showToast('PDFを保存しました ✓');
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
     }
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
   } catch (err) {
     hideLoading();
     showToast('エラー: ' + err.message);
     console.error(err);
   }
+}
+
+function openPdfUrl() {
+  if (!pendingPdfUrl) return;
+  document.getElementById('save-modal-overlay').classList.remove('show');
+  window.open(pendingPdfUrl, '_blank');
+  setTimeout(() => {
+    if (pendingPdfUrl) { URL.revokeObjectURL(pendingPdfUrl); pendingPdfUrl = null; }
+  }, 60000);
+}
+
+function closeSaveModal(e) {
+  if (e && e.target !== document.getElementById('save-modal-overlay')) return;
+  document.getElementById('save-modal-overlay').classList.remove('show');
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -773,11 +989,10 @@ function showHelp() {
     '　 回転・反転ボタンで向きを修正\n' +
     '③ 補正：プリセットまたはスライダーで調整\n' +
     '　 「スキャン」や「白黒」がおすすめ\n' +
-    '④ PDF設定を選んで「保存」\n\n' +
-    '【iPhoneでの保存方法】\n' +
-    'PDFが表示されたら、画面下の\n' +
-    '共有ボタン →「ファイルに保存」\n' +
-    'または「iBooks/ファイル」アプリへ追加'
+    '④ PDF設定を選んで「PDFを保存する」\n\n' +
+    '【iPhoneへの保存方法】\n' +
+    '「PDFを開く」→ 共有ボタン(□↑)\n' +
+    '→「ファイルに保存」→「追加」'
   );
 }
 
