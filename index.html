@@ -736,7 +736,8 @@ function initPerspective(dataUrl) {
       canvas.width  = rect.width  || window.innerWidth;
       canvas.height = rect.height || (window.innerHeight - 210);
       rebuildWorkingCanvas();
-      initDefaultCorners();
+      computeLayout();       // perspImgRect を先に確定
+      initDefaultCorners();  // 確定した perspImgRect を使って初期座標を設定
       redrawPerspView();
       // ハンドルを表示
       for (let i = 0; i < 4; i++) {
@@ -850,6 +851,19 @@ function redrawPerspView() {
   updateHandlePositions();
 }
 
+// perspImgRect だけを先に計算する（描画なし）
+function computeLayout() {
+  const canvas = document.getElementById('perspective-canvas');
+  if (!canvas || !workingCanvas) return;
+  const cw = canvas.width, ch = canvas.height;
+  const scale = Math.min(cw / workingCanvas.width, ch / workingCanvas.height);
+  const dw = workingCanvas.width * scale;
+  const dh = workingCanvas.height * scale;
+  const dx = (cw - dw) / 2;
+  const dy = (ch - dh) / 2;
+  perspImgRect = { x: dx, y: dy, w: dw, h: dh, scale };
+}
+
 function initDefaultCorners() {
   const { x, y, w, h } = perspImgRect;
   const inset = 0.15;
@@ -940,6 +954,7 @@ function doPerspRotate(deg) {
   const rect = wrap.getBoundingClientRect();
   canvas.width  = rect.width;
   canvas.height = rect.height;
+  computeLayout();
   initDefaultCorners();
   redrawPerspView();
 }
@@ -947,6 +962,7 @@ function doPerspRotate(deg) {
 function doPerspFlipX() {
   perspFlipXState = !perspFlipXState;
   rebuildWorkingCanvas();
+  computeLayout();
   initDefaultCorners();
   redrawPerspView();
 }
@@ -954,6 +970,7 @@ function doPerspFlipX() {
 function doPerspFlipY() {
   perspFlipYState = !perspFlipYState;
   rebuildWorkingCanvas();
+  computeLayout();
   initDefaultCorners();
   redrawPerspView();
 }
@@ -963,6 +980,7 @@ function doPerspReset() {
   perspFlipXState = false;
   perspFlipYState = false;
   rebuildWorkingCanvas();
+  computeLayout();
   initDefaultCorners();
   redrawPerspView();
 }
