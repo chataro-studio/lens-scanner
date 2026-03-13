@@ -6,8 +6,6 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>新聞スキャナー</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     :root {
@@ -127,14 +125,34 @@
       padding: 5px 12px; border-radius: 12px; white-space: nowrap;
     }
 
-    /* ── クロップ ── */
+    /* ── クロップ（パース補正） ── */
     #screen-crop { background: #000; }
     #screen-crop.active { display: flex; flex-direction: column; min-height: calc(100vh - 110px); }
     .crop-wrap {
       flex: 1; position: relative; overflow: hidden;
       min-height: 0; background: #000;
+      touch-action: none;
     }
-    #crop-img { display: block; max-width: 100%; }
+    #perspective-canvas {
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      display: block;
+      touch-action: none;
+    }
+    .corner-handle {
+      position: absolute;
+      width: 48px; height: 48px;
+      background: #007aff;
+      border: 3px solid #fff;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+      touch-action: none;
+      cursor: grab;
+      z-index: 10;
+      display: none;
+    }
+    .corner-handle.visible { display: block; }
     .crop-ctrl {
       background: #1c1c1e; padding: 14px 16px;
       padding-bottom: calc(14px + env(safe-area-inset-bottom));
@@ -148,17 +166,9 @@
       border-radius: 10px; padding: 9px 14px; font-size: 13px; cursor: pointer;
       display: flex; align-items: center; gap: 5px;
     }
-    .mode-toggle {
-      display: flex; gap: 6px; margin-bottom: 12px;
-    }
-    .mode-btn {
-      flex: 1; padding: 9px 8px; border: none; border-radius: 10px;
-      font-size: 13px; font-weight: 600; cursor: pointer;
-      background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.5);
-      transition: background 0.15s, color 0.15s;
-    }
-    .mode-btn.active {
-      background: var(--blue); color: #fff;
+    .crop-hint {
+      text-align: center; color: rgba(255,255,255,0.5);
+      font-size: 12px; margin-bottom: 12px;
     }
     .row2 { display: flex; gap: 10px; }
     .btn-dark { background: rgba(255,255,255,0.15); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer; flex: 1; }
@@ -250,15 +260,9 @@
       width: 40px; height: 4px; background: var(--border);
       border-radius: 2px; margin: 0 auto 18px;
     }
-    .modal-title {
-      font-size: 18px; font-weight: 700; text-align: center; margin-bottom: 6px;
-    }
-    .modal-sub {
-      font-size: 13px; color: var(--subtext); text-align: center; margin-bottom: 22px;
-    }
-    .save-steps {
-      display: flex; flex-direction: column; gap: 14px; margin-bottom: 24px;
-    }
+    .modal-title { font-size: 18px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+    .modal-sub { font-size: 13px; color: var(--subtext); text-align: center; margin-bottom: 22px; }
+    .save-steps { display: flex; flex-direction: column; gap: 14px; margin-bottom: 24px; }
     .save-step {
       display: flex; align-items: flex-start; gap: 14px;
       background: var(--bg); border-radius: 14px; padding: 14px;
@@ -271,10 +275,7 @@
     .save-step-body { flex: 1; }
     .save-step-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
     .save-step-desc { font-size: 12px; color: var(--subtext); line-height: 1.5; }
-    .save-step-icon {
-      font-size: 26px; flex-shrink: 0;
-      display: flex; align-items: center; justify-content: center;
-    }
+    .save-step-icon { font-size: 26px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
     .modal-open-btn {
       width: 100%; padding: 17px; background: var(--blue); color: #fff;
       border: none; border-radius: 14px; font-size: 17px; font-weight: 700;
@@ -329,9 +330,9 @@
 <div id="steps-bar">
   <div class="step-item active" id="step-1"><div class="step-num">1</div>撮影</div>
   <div class="step-sep"></div>
-  <div class="step-item" id="step-2"><div class="step-num">2</div>切り抜き</div>
+  <div class="step-item" id="step-2"><div class="step-num">2</div>補正枠</div>
   <div class="step-sep"></div>
-  <div class="step-item" id="step-3"><div class="step-num">3</div>補正</div>
+  <div class="step-item" id="step-3"><div class="step-num">3</div>画質調整</div>
   <div class="step-sep"></div>
   <div class="step-item" id="step-4"><div class="step-num">4</div>PDF</div>
 </div>
@@ -364,26 +365,27 @@
   </div>
 </div>
 
-<!-- ■ スクリーン2: 切り抜き -->
+<!-- ■ スクリーン2: パース補正 -->
 <div class="screen" id="screen-crop">
-  <div class="crop-wrap">
-    <img id="crop-img" alt="切り抜き対象">
+  <div class="crop-wrap" id="crop-wrap">
+    <canvas id="perspective-canvas"></canvas>
+    <div class="corner-handle" id="ch-0"></div>
+    <div class="corner-handle" id="ch-1"></div>
+    <div class="corner-handle" id="ch-2"></div>
+    <div class="corner-handle" id="ch-3"></div>
   </div>
   <div class="crop-ctrl">
-    <div class="mode-toggle">
-      <button class="mode-btn active" id="mode-move" onclick="setCropMode('move')">🖐 画像を動かす</button>
-      <button class="mode-btn" id="mode-crop" onclick="setCropMode('crop')">✂️ 枠を調整</button>
-    </div>
+    <p class="crop-hint">青いハンドルをドラッグして書類の四隅に合わせてください</p>
     <div class="icon-btns">
-      <button class="icon-btn" onclick="cropRotate(-90)">↺ 左回転</button>
-      <button class="icon-btn" onclick="cropRotate(90)">↻ 右回転</button>
-      <button class="icon-btn" onclick="cropFlipX()">↔ 左右反転</button>
-      <button class="icon-btn" onclick="cropFlipY()">↕ 上下反転</button>
-      <button class="icon-btn" onclick="cropReset()">⊙ リセット</button>
+      <button class="icon-btn" onclick="doPerspRotate(-90)">↺ 左回転</button>
+      <button class="icon-btn" onclick="doPerspRotate(90)">↻ 右回転</button>
+      <button class="icon-btn" onclick="doPerspFlipX()">↔ 左右反転</button>
+      <button class="icon-btn" onclick="doPerspFlipY()">↕ 上下反転</button>
+      <button class="icon-btn" onclick="doPerspReset()">⊙ リセット</button>
     </div>
     <div class="row2">
       <button class="btn-dark" onclick="goHome()">キャンセル</button>
-      <button class="btn-confirm" onclick="applyCrop()">切り抜く →</button>
+      <button class="btn-confirm" onclick="applyPerspective()">台形補正 →</button>
     </div>
   </div>
 </div>
@@ -394,14 +396,12 @@
     <canvas id="correct-canvas"></canvas>
   </div>
   <div class="correct-ctrl">
-    <!-- プリセット -->
     <div class="presets">
       <button class="preset-btn on" id="pre-original" onclick="applyPreset('original')">元画像</button>
       <button class="preset-btn" id="pre-scan" onclick="applyPreset('scan')">スキャン</button>
       <button class="preset-btn" id="pre-bw" onclick="applyPreset('bw')">白黒</button>
       <button class="preset-btn" id="pre-enhance" onclick="applyPreset('enhance')">鮮明化</button>
     </div>
-    <!-- スライダー -->
     <div class="slider-row">
       <div class="slider-lbl"><span>明るさ</span><span id="lbl-brightness">100%</span></div>
       <input type="range" id="sl-brightness" min="50" max="200" value="100" oninput="sliderChange()">
@@ -419,7 +419,7 @@
       <input type="range" id="sl-grayscale" min="0" max="100" value="0" oninput="sliderChange()">
     </div>
     <div class="row2" style="margin-top:4px;">
-      <button class="btn-dark" onclick="showScreen('crop')">← 戻る</button>
+      <button class="btn-dark" onclick="backToCrop()">← 戻る</button>
       <button class="btn-confirm" onclick="goToPdf()">PDF設定 →</button>
     </div>
   </div>
@@ -518,8 +518,6 @@
 // ===================================================
 // 状態管理
 // ===================================================
-let cropper = null;
-let flipX = 1, flipY = 1;
 let croppedDataUrl = null;
 let correctedDataUrl = null;
 let srcImg = null;
@@ -527,6 +525,17 @@ let cameraStream = null;
 let cameraFacing = 'environment';
 let pendingPdfUrl = null;
 let pendingPdfName = null;
+
+// パース補正用状態
+let perspRawDataUrl = null;
+let perspRawImage = null;
+let perspRotation = 0;
+let perspFlipXState = false;
+let perspFlipYState = false;
+let workingCanvas = null;
+let perspCorners = [];
+let perspImgRect = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
+let activeDragCorner = -1;
 
 // ===================================================
 // ナビゲーション
@@ -554,14 +563,18 @@ function goBack() {
   if (idx > 0) {
     const prev = STEP_ORDER[idx - 1];
     if (prev === 'home') goHome();
+    else if (prev === 'crop') backToCrop();
     else showScreen(prev);
   }
 }
 
 function goHome() {
-  if (cropper) { cropper.destroy(); cropper = null; }
   stopCamera();
-  flipX = 1; flipY = 1;
+  perspRawDataUrl = null;
+  perspRawImage = null;
+  workingCanvas = null;
+  perspCorners = [];
+  activeDragCorner = -1;
   croppedDataUrl = null;
   correctedDataUrl = null;
   srcImg = null;
@@ -569,13 +582,17 @@ function goHome() {
   showScreen('home');
 }
 
+function backToCrop() {
+  if (perspRawDataUrl) {
+    initPerspective(perspRawDataUrl);
+  }
+}
+
 // ===================================================
 // カメラ（getUserMedia 最高画質）
 // ===================================================
 async function openCamera() {
-  // getUserMedia が使えるか確認
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    // フォールバック: ネイティブカメラ起動
     openNativeCamera();
     return;
   }
@@ -605,7 +622,6 @@ async function openCamera() {
     document.getElementById('screen-camera').classList.add('active');
   } catch (err) {
     hideLoading();
-    console.warn('getUserMedia失敗、ネイティブカメラに切り替え:', err);
     openNativeCamera();
   }
 }
@@ -634,7 +650,7 @@ function capturePhoto() {
   const dataUrl = canvas.toDataURL('image/jpeg', 0.97);
   stopCamera();
   document.getElementById('screen-camera').classList.remove('active');
-  initCropper(dataUrl);
+  initPerspective(dataUrl);
 }
 
 function cancelCamera() {
@@ -664,77 +680,394 @@ document.getElementById('file-input').addEventListener('change', function (e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = ev => initCropper(ev.target.result);
+  reader.onload = ev => initPerspective(ev.target.result);
   reader.readAsDataURL(file);
   this.value = '';
 });
 
 // ===================================================
-// Cropper.js
+// パース補正（台形補正）
 // ===================================================
-function initCropper(dataSrc) {
-  const img = document.getElementById('crop-img');
-  if (cropper) { cropper.destroy(); cropper = null; }
-  flipX = 1; flipY = 1;
+function initPerspective(dataUrl) {
+  perspRawDataUrl = dataUrl;
+  perspRotation = 0;
+  perspFlipXState = false;
+  perspFlipYState = false;
+  activeDragCorner = -1;
 
   showScreen('crop');
-  img.src = dataSrc;
-  img.onload = function () {
-    // モードボタンを初期状態にリセット
-    document.getElementById('mode-move').classList.add('active');
-    document.getElementById('mode-crop').classList.remove('active');
-    cropper = new Cropper(img, {
-      viewMode: 1,
-      dragMode: 'move',   // 初期は画像を動かすモード
-      autoCropArea: 0.88,
-      guides: true,
-      center: true,
-      highlight: true,
-      cropBoxMovable: true,
-      cropBoxResizable: true,
-      toggleDragModeOnDblclick: false,
-      zoomable: true,
-      zoomOnWheel: true,
-      wheelZoomRatio: 0.1,
+
+  const img = new Image();
+  img.onload = () => {
+    perspRawImage = img;
+    requestAnimationFrame(() => {
+      const wrap = document.getElementById('crop-wrap');
+      const canvas = document.getElementById('perspective-canvas');
+      const rect = wrap.getBoundingClientRect();
+      canvas.width  = rect.width  || window.innerWidth;
+      canvas.height = rect.height || (window.innerHeight - 210);
+      rebuildWorkingCanvas();
+      initDefaultCorners();
+      redrawPerspView();
+      // ハンドルを表示
+      for (let i = 0; i < 4; i++) {
+        document.getElementById('ch-' + i).classList.add('visible');
+      }
     });
   };
+  img.src = dataUrl;
 }
 
-function cropRotate(deg) { cropper && cropper.rotate(deg); }
+function rebuildWorkingCanvas() {
+  if (!perspRawImage) return;
+  const iw = perspRawImage.naturalWidth;
+  const ih = perspRawImage.naturalHeight;
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d');
 
-function cropFlipX() {
-  flipX *= -1;
-  cropper && cropper.scaleX(flipX);
+  if (perspRotation === 90 || perspRotation === 270) {
+    c.width = ih; c.height = iw;
+  } else {
+    c.width = iw; c.height = ih;
+  }
+
+  ctx.save();
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate(perspRotation * Math.PI / 180);
+  if (perspFlipXState) ctx.scale(-1, 1);
+  if (perspFlipYState) ctx.scale(1, -1);
+  ctx.drawImage(perspRawImage, -iw / 2, -ih / 2, iw, ih);
+  ctx.restore();
+  workingCanvas = c;
 }
 
-function cropFlipY() {
-  flipY *= -1;
-  cropper && cropper.scaleY(flipY);
+function redrawPerspView() {
+  const canvas = document.getElementById('perspective-canvas');
+  if (!canvas || !workingCanvas) return;
+  const ctx = canvas.getContext('2d');
+  const cw = canvas.width, ch = canvas.height;
+
+  // レイアウト計算
+  const scale = Math.min(cw / workingCanvas.width, ch / workingCanvas.height);
+  const dw = workingCanvas.width * scale;
+  const dh = workingCanvas.height * scale;
+  const dx = (cw - dw) / 2;
+  const dy = (ch - dh) / 2;
+  perspImgRect = { x: dx, y: dy, w: dw, h: dh, scale };
+
+  // 1. 黒背景
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cw, ch);
+
+  // 2. 全体を暗く表示
+  ctx.globalAlpha = 0.35;
+  ctx.drawImage(workingCanvas, dx, dy, dw, dh);
+  ctx.globalAlpha = 1;
+
+  if (perspCorners.length === 4) {
+    // 3. 四角形内は明るく表示
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(perspCorners[0].x, perspCorners[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(perspCorners[i].x, perspCorners[i].y);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(workingCanvas, dx, dy, dw, dh);
+    ctx.restore();
+
+    // 4. 枠線
+    ctx.strokeStyle = '#007aff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(perspCorners[0].x, perspCorners[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(perspCorners[i].x, perspCorners[i].y);
+    ctx.closePath();
+    ctx.stroke();
+
+    // 5. 対角線（補助線）
+    ctx.strokeStyle = 'rgba(0,122,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(perspCorners[0].x, perspCorners[0].y);
+    ctx.lineTo(perspCorners[2].x, perspCorners[2].y);
+    ctx.moveTo(perspCorners[1].x, perspCorners[1].y);
+    ctx.lineTo(perspCorners[3].x, perspCorners[3].y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  updateHandlePositions();
 }
 
-function cropReset() {
-  flipX = 1; flipY = 1;
-  cropper && cropper.reset();
+function initDefaultCorners() {
+  const { x, y, w, h } = perspImgRect;
+  const inset = 0.04;
+  perspCorners = [
+    { x: x + w * inset,       y: y + h * inset },
+    { x: x + w * (1 - inset), y: y + h * inset },
+    { x: x + w * (1 - inset), y: y + h * (1 - inset) },
+    { x: x + w * inset,       y: y + h * (1 - inset) },
+  ];
 }
 
-function setCropMode(mode) {
-  if (!cropper) return;
-  cropper.setDragMode(mode);
-  document.getElementById('mode-move').classList.toggle('active', mode === 'move');
-  document.getElementById('mode-crop').classList.toggle('active', mode === 'crop');
+function updateHandlePositions() {
+  perspCorners.forEach((c, i) => {
+    const h = document.getElementById('ch-' + i);
+    if (h) { h.style.left = c.x + 'px'; h.style.top = c.y + 'px'; }
+  });
 }
 
-function applyCrop() {
-  if (!cropper) return;
-  showLoading('切り抜き中...');
+function moveCorner(idx, x, y) {
+  const canvas = document.getElementById('perspective-canvas');
+  perspCorners[idx] = {
+    x: Math.max(0, Math.min(canvas.width, x)),
+    y: Math.max(0, Math.min(canvas.height, y)),
+  };
+  updateHandlePositions();
+  redrawPerspView();
+}
+
+// ハンドルイベント（1回だけ登録）
+(function() {
+  for (let i = 0; i < 4; i++) {
+    const h = document.getElementById('ch-' + i);
+    h.addEventListener('touchstart', (function(idx) {
+      return function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        activeDragCorner = idx;
+      };
+    })(i), { passive: false });
+
+    h.addEventListener('mousedown', (function(idx) {
+      return function(e) {
+        e.preventDefault();
+        activeDragCorner = idx;
+      };
+    })(i));
+  }
+
+  const wrap = document.getElementById('crop-wrap');
+  const canvas = document.getElementById('perspective-canvas');
+
+  wrap.addEventListener('touchmove', function(e) {
+    if (activeDragCorner < 0) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    moveCorner(activeDragCorner, touch.clientX - rect.left, touch.clientY - rect.top);
+  }, { passive: false });
+
+  wrap.addEventListener('mousemove', function(e) {
+    if (activeDragCorner < 0) return;
+    const rect = canvas.getBoundingClientRect();
+    moveCorner(activeDragCorner, e.clientX - rect.left, e.clientY - rect.top);
+  });
+
+  const endDrag = function() { activeDragCorner = -1; };
+  wrap.addEventListener('touchend', endDrag);
+  wrap.addEventListener('touchcancel', endDrag);
+  document.addEventListener('mouseup', endDrag);
+})();
+
+function doPerspRotate(deg) {
+  perspRotation = (perspRotation + deg + 360) % 360;
+  rebuildWorkingCanvas();
+  const canvas = document.getElementById('perspective-canvas');
+  const wrap = document.getElementById('crop-wrap');
+  const rect = wrap.getBoundingClientRect();
+  canvas.width  = rect.width;
+  canvas.height = rect.height;
+  initDefaultCorners();
+  redrawPerspView();
+}
+
+function doPerspFlipX() {
+  perspFlipXState = !perspFlipXState;
+  rebuildWorkingCanvas();
+  initDefaultCorners();
+  redrawPerspView();
+}
+
+function doPerspFlipY() {
+  perspFlipYState = !perspFlipYState;
+  rebuildWorkingCanvas();
+  initDefaultCorners();
+  redrawPerspView();
+}
+
+function doPerspReset() {
+  perspRotation = 0;
+  perspFlipXState = false;
+  perspFlipYState = false;
+  rebuildWorkingCanvas();
+  initDefaultCorners();
+  redrawPerspView();
+}
+
+function applyPerspective() {
+  if (!workingCanvas || perspCorners.length < 4) return;
+
+  // 有効な四角形チェック（面積が小さすぎないか）
+  let area = 0;
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    area += perspCorners[i].x * perspCorners[j].y - perspCorners[j].x * perspCorners[i].y;
+  }
+  if (Math.abs(area) < 500) {
+    showToast('四隅のハンドルを書類の角に合わせてください');
+    return;
+  }
+
+  showLoading('台形補正中...');
   setTimeout(() => {
-    // サイズ上限なし・最高画質でクロップ
-    const canvas = cropper.getCroppedCanvas({ imageSmoothingQuality: 'high' });
-    croppedDataUrl = canvas.toDataURL('image/jpeg', 0.97);
-    cropper.destroy(); cropper = null;
-    hideLoading();
-    initCorrection(croppedDataUrl);
-  }, 30);
+    try {
+      // キャンバス座標 → 画像座標に変換
+      const toImgScale = workingCanvas.width / perspImgRect.w;
+      const srcPts = perspCorners.map(c => ({
+        x: (c.x - perspImgRect.x) * toImgScale,
+        y: (c.y - perspImgRect.y) * toImgScale,
+      }));
+
+      // 出力サイズを計算（各辺の平均）
+      const topW   = Math.hypot(srcPts[1].x - srcPts[0].x, srcPts[1].y - srcPts[0].y);
+      const botW   = Math.hypot(srcPts[2].x - srcPts[3].x, srcPts[2].y - srcPts[3].y);
+      const leftH  = Math.hypot(srcPts[3].x - srcPts[0].x, srcPts[3].y - srcPts[0].y);
+      const rightH = Math.hypot(srcPts[2].x - srcPts[1].x, srcPts[2].y - srcPts[1].y);
+      let outW = Math.round((topW + botW) / 2);
+      let outH = Math.round((leftH + rightH) / 2);
+
+      // 最大解像度を制限
+      const MAX_DIM = 1920;
+      if (outW > MAX_DIM || outH > MAX_DIM) {
+        const s = MAX_DIM / Math.max(outW, outH);
+        outW = Math.round(outW * s);
+        outH = Math.round(outH * s);
+      }
+
+      const resultCanvas = perspectiveWarp(workingCanvas, srcPts, outW, outH);
+      croppedDataUrl = resultCanvas.toDataURL('image/jpeg', 0.97);
+      hideLoading();
+      initCorrection(croppedDataUrl);
+    } catch (err) {
+      hideLoading();
+      showToast('エラー: ' + err.message);
+      console.error(err);
+    }
+  }, 50);
+}
+
+// ===================================================
+// ホモグラフィ行列の計算
+// ===================================================
+function computeHomography(src, dst) {
+  // src[i] -> dst[i] となるホモグラフィ H を求める
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const { x: sx, y: sy } = src[i];
+    const { x: dx, y: dy } = dst[i];
+    A.push([sx, sy, 1,  0,  0, 0, -dx * sx, -dx * sy]);
+    b.push(dx);
+    A.push([ 0,  0, 0, sx, sy, 1, -dy * sx, -dy * sy]);
+    b.push(dy);
+  }
+  const h = solveLinear8(A, b);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+
+function solveLinear8(A, b) {
+  const n = 8;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let maxR = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[maxR][col])) maxR = r;
+    }
+    [M[col], M[maxR]] = [M[maxR], M[col]];
+    const pivot = M[col][col];
+    if (Math.abs(pivot) < 1e-10) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col] / pivot;
+      for (let j = col; j <= n; j++) M[r][j] -= f * M[col][j];
+    }
+  }
+  return M.map((row, i) => row[n] / row[i]);
+}
+
+function perspectiveWarp(srcCanvas, srcPts, outW, outH) {
+  // 出力ピクセル(ox,oy) → ソース(sx,sy) の逆マッピング
+  const dstPts = [
+    { x: 0,    y: 0    },
+    { x: outW, y: 0    },
+    { x: outW, y: outH },
+    { x: 0,    y: outH },
+  ];
+
+  // 処理解像度の制限（パフォーマンス対策）
+  let procCanvas = srcCanvas;
+  let pts = srcPts;
+  const PROC_MAX = 2000;
+  const maxDim = Math.max(srcCanvas.width, srcCanvas.height);
+  if (maxDim > PROC_MAX) {
+    const sf = PROC_MAX / maxDim;
+    procCanvas = document.createElement('canvas');
+    procCanvas.width  = Math.round(srcCanvas.width  * sf);
+    procCanvas.height = Math.round(srcCanvas.height * sf);
+    procCanvas.getContext('2d').drawImage(srcCanvas, 0, 0, procCanvas.width, procCanvas.height);
+    pts = srcPts.map(p => ({ x: p.x * sf, y: p.y * sf }));
+  }
+
+  const H = computeHomography(dstPts, pts);
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width  = outW;
+  outCanvas.height = outH;
+  const ctx = outCanvas.getContext('2d');
+
+  const srcCtx  = procCanvas.getContext('2d');
+  const srcData = srcCtx.getImageData(0, 0, procCanvas.width, procCanvas.height);
+  const outData = ctx.createImageData(outW, outH);
+
+  const sw = procCanvas.width, sh = procCanvas.height;
+  const sd = srcData.data, od = outData.data;
+
+  for (let oy = 0; oy < outH; oy++) {
+    for (let ox = 0; ox < outW; ox++) {
+      const w_ = H[6] * ox + H[7] * oy + 1;
+      const sx = (H[0] * ox + H[1] * oy + H[2]) / w_;
+      const sy = (H[3] * ox + H[4] * oy + H[5]) / w_;
+
+      const x0 = sx | 0, y0 = sy | 0;
+      const x1 = x0 + 1, y1 = y0 + 1;
+      const oi = (oy * outW + ox) * 4;
+
+      if (x0 < 0 || y0 < 0 || x1 >= sw || y1 >= sh) {
+        od[oi] = od[oi + 1] = od[oi + 2] = 255;
+        od[oi + 3] = 255;
+        continue;
+      }
+
+      const fx = sx - x0, fy = sy - y0;
+      const w00 = (1 - fx) * (1 - fy);
+      const w10 = fx * (1 - fy);
+      const w01 = (1 - fx) * fy;
+      const w11 = fx * fy;
+      const i00 = (y0 * sw + x0) * 4;
+      const i10 = (y0 * sw + x1) * 4;
+      const i01 = (y1 * sw + x0) * 4;
+      const i11 = (y1 * sw + x1) * 4;
+
+      od[oi]     = (sd[i00]     * w00 + sd[i10]     * w10 + sd[i01]     * w01 + sd[i11]     * w11) | 0;
+      od[oi + 1] = (sd[i00 + 1] * w00 + sd[i10 + 1] * w10 + sd[i01 + 1] * w01 + sd[i11 + 1] * w11) | 0;
+      od[oi + 2] = (sd[i00 + 2] * w00 + sd[i10 + 2] * w10 + sd[i01 + 2] * w01 + sd[i11 + 2] * w11) | 0;
+      od[oi + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(outData, 0, 0);
+  return outCanvas;
 }
 
 // ===================================================
@@ -803,7 +1136,6 @@ function renderPreview() {
   }
 }
 
-// アンシャープマスク（畳み込み）
 function unsharpMask(imageData, k) {
   const { width, height, data } = imageData;
   const out = new Uint8ClampedArray(data.length);
@@ -822,7 +1154,6 @@ function unsharpMask(imageData, k) {
   return new ImageData(out, width, height);
 }
 
-// プリセット
 const PRESETS = {
   original: { brightness: 100, contrast: 100, sharpen:  0, grayscale:   0 },
   scan:     { brightness: 112, contrast: 135, sharpen: 35, grayscale:   0 },
@@ -950,7 +1281,6 @@ async function downloadPdf() {
     pdf.addImage(imgData, 'JPEG', dx, dy, dw, dh);
 
     const fname = getNextFilename();
-
     hideLoading();
 
     const blob = pdf.output('blob');
@@ -958,7 +1288,6 @@ async function downloadPdf() {
     const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent);
 
     if (isIOS) {
-      // iOSはモーダルで手順を案内してから <a download> でダウンロード
       pendingPdfUrl  = url;
       pendingPdfName = fname;
       document.getElementById('save-modal-overlay').classList.add('show');
@@ -1034,11 +1363,11 @@ function showHelp() {
   alert(
     '【使い方】\n\n' +
     '① カメラで撮影 または アルバムから選択\n' +
-    '② 切り抜き：記事の範囲をドラッグで調整\n' +
-    '　 回転・反転ボタンで向きを修正\n' +
-    '③ 補正：プリセットまたはスライダーで調整\n' +
-    '　 「スキャン」や「白黒」がおすすめ\n' +
-    '④ PDF設定を選んで「PDFを保存する」\n\n' +
+    '② 四隅の青いハンドルを書類の角に合わせる\n' +
+    '　 斜めから撮った書類も正面から見た形に補正できます\n' +
+    '③ 「台形補正」ボタンで変換\n' +
+    '④ 補正：プリセットまたはスライダーで調整\n' +
+    '⑤ PDF設定を選んで「PDFを保存する」\n\n' +
     '【iPhoneへの保存方法】\n' +
     '「PDFを開く」→ 共有ボタン(□↑)\n' +
     '→「ファイルに保存」→「追加」'
