@@ -852,7 +852,7 @@ function redrawPerspView() {
 
 function initDefaultCorners() {
   const { x, y, w, h } = perspImgRect;
-  const inset = 0.04;
+  const inset = 0.15;
   perspCorners = [
     { x: x + w * inset,       y: y + h * inset },
     { x: x + w * (1 - inset), y: y + h * inset },
