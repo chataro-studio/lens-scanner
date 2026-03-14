@@ -1,7 +1,7 @@
 {
-  "name": "新聞スキャナー",
-  "short_name": "新聞スキャナー",
-  "description": "記事を撮影してきれいなPDFを作成するスキャナーアプリ",
+  "name": "スキャンかんたんPDF",
+  "short_name": "スキャンかんたんPDF",
+  "description": "書類や記事をかんたんにスキャンしてPDF化できるアプリ",
   "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
