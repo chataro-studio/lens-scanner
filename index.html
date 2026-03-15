@@ -1195,7 +1195,7 @@ async function _autoDetectWithOpenCV() {
   off.width = sw; off.height = sh;
   off.getContext('2d').drawImage(workingCanvas, 0, 0, sw, sh);
 
-  let src, gray, blurred, edges, contours, hierarchy;
+  let src, gray, enhanced, blurred, edges, contours, hierarchy, clahe;
   try {
     // 1. imread（CanvasからMat生成）
     src = cv.imread(off);
@@ -1204,20 +1204,28 @@ async function _autoDetectWithOpenCV() {
     gray = new cv.Mat();
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-    // 3. ガウシアンぼかし
+    // 3. CLAHE（コントラスト強調）暗い画像でもエッジが出やすくなる
+    clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+    enhanced = new cv.Mat();
+    clahe.apply(gray, enhanced);
+
+    // 4. ガウシアンぼかし
     blurred = new cv.Mat();
-    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    cv.GaussianBlur(enhanced, blurred, new cv.Size(5, 5), 0);
 
-    // 4. Cannyエッジ検出
+    // 5. Cannyエッジ検出（低閾値50↓ノイズ抑制、高閾値250↑エッジ強調）
     edges = new cv.Mat();
-    cv.Canny(blurred, edges, 75, 200);
+    cv.Canny(blurred, edges, 50, 250);
 
-    // 5. 輪郭検出
+    // 6. 輪郭検出
     contours = new cv.MatVector();
     hierarchy = new cv.Mat();
     cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    // 6. 最大面積の四角形輪郭を選択
+    // 最小面積フィルター：画像全体の20%未満は誤検出として除外
+    const minArea = sw * sh * 0.20;
+
+    // 7. 最大面積の四角形輪郭を選択
     let bestContour = null;
     let bestArea = 0;
     for (let i = 0; i < contours.size(); i++) {
@@ -1227,7 +1235,8 @@ async function _autoDetectWithOpenCV() {
       const approx = new cv.Mat();
       cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
       cnt.delete();
-      if (approx.rows === 4 && area > bestArea) {
+      // 4点 かつ 最小面積以上 かつ 凸形のみ採用
+      if (approx.rows === 4 && area >= minArea && cv.isContourConvex(approx) && area > bestArea) {
         if (bestContour) bestContour.delete();
         bestContour = approx;
         bestArea = area;
@@ -1238,7 +1247,7 @@ async function _autoDetectWithOpenCV() {
 
     if (!bestContour) return null;
 
-    // 7. 4点を取得（approxPolyDP結果は data32S に格納）
+    // 8. 4点を取得（approxPolyDP結果は data32S に格納）
     const pts = [];
     for (let i = 0; i < 4; i++) {
       pts.push({ x: bestContour.data32S[i * 2], y: bestContour.data32S[i * 2 + 1] });
@@ -1279,8 +1288,10 @@ async function _autoDetectWithOpenCV() {
 
   } finally {
     // Matオブジェクトを必ず解放（メモリリーク防止）
+    if (clahe)     clahe.delete();
     if (src)       src.delete();
     if (gray)      gray.delete();
+    if (enhanced)  enhanced.delete();
     if (blurred)   blurred.delete();
     if (edges)     edges.delete();
     if (contours)  contours.delete();
