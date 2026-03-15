@@ -336,6 +336,21 @@
       border: none; font-size: 15px; cursor: pointer;
     }
 
+    /* ── 保存完了モーダル ── */
+    #done-modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45); z-index: 900;
+      align-items: flex-end; justify-content: center;
+    }
+    #done-modal-overlay.show { display: flex; }
+    #done-modal {
+      background: var(--card); border-radius: 22px 22px 0 0;
+      width: 100%; max-width: 500px;
+      padding: 20px 24px;
+      padding-bottom: calc(20px + env(safe-area-inset-bottom));
+      animation: slideUp 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
     /* ── トースト ── */
     #toast {
       position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
@@ -537,6 +552,17 @@
       <button class="fmt-btn" onclick="downloadImage('jpeg')">JPEG</button>
       <button class="fmt-btn" onclick="downloadImage('png')">PNG</button>
     </div>
+  </div>
+</div>
+
+<!-- ■ 保存完了モーダル -->
+<div id="done-modal-overlay">
+  <div id="done-modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">✅ 保存しました！</div>
+    <div class="modal-sub">作業を完了してトップ画面に戻るか、保存作業を続けるか選んでください</div>
+    <button class="modal-open-btn" onclick="goHome()">🏠 作業完了・トップへ戻る</button>
+    <button class="modal-cancel-btn" onclick="closeDoneModal()">📄 保存画面に戻る</button>
   </div>
 </div>
 
@@ -1549,6 +1575,7 @@ async function downloadPdf() {
       } else {
         triggerDownload(url, fname);
         showToast('PDFを保存しました ✓');
+        showDoneModal();
         setTimeout(() => URL.revokeObjectURL(url), 30000);
       }
     } catch (err) {
@@ -1557,6 +1584,14 @@ async function downloadPdf() {
       console.error(err);
     }
   });
+}
+
+function showDoneModal() {
+  document.getElementById('done-modal-overlay').classList.add('show');
+}
+
+function closeDoneModal() {
+  document.getElementById('done-modal-overlay').classList.remove('show');
 }
 
 function showImgFormatModal() {
@@ -1595,10 +1630,12 @@ async function downloadImage(fmt) {
 
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: fname });
+        showDoneModal();
       } else {
         const url = URL.createObjectURL(blob);
         triggerDownload(url, fname);
         showToast('画像を保存しました ✓');
+        showDoneModal();
         setTimeout(() => URL.revokeObjectURL(url), 30000);
       }
     } catch (err) {
@@ -1613,6 +1650,7 @@ function openPdfUrl() {
   if (!pendingPdfUrl) return;
   document.getElementById('save-modal-overlay').classList.remove('show');
   triggerDownload(pendingPdfUrl, pendingPdfName);
+  showDoneModal();
   setTimeout(() => {
     if (pendingPdfUrl) { URL.revokeObjectURL(pendingPdfUrl); pendingPdfUrl = null; }
     pendingPdfName = null;
