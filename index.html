@@ -631,6 +631,22 @@ let perspCorners = [];
 let perspImgRect = { x: 0, y: 0, w: 0, h: 0, scale: 1 };
 let activeDragCorner = -1;
 
+// OpenCV.js 読み込み状態
+let cvReady = false;
+(function() {
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://docs.opencv.org/4.8.0/opencv.js';
+  s.onload = function() {
+    if (typeof cv !== 'undefined' && cv.Mat) {
+      cvReady = true;
+    } else if (typeof cv !== 'undefined') {
+      cv['onRuntimeInitialized'] = function() { cvReady = true; };
+    }
+  };
+  document.head.appendChild(s);
+})();
+
 // ハンドルを角から外側へオフセットする方向（TL/TR/BR/BL）
 const HANDLE_OFFSETS = [
   { x: -40, y: -40 },
@@ -1043,7 +1059,7 @@ function initDefaultCorners() {
   ];
 }
 
-// ── 用紙自動検出（Canvas API実装） ──
+// ── 用紙自動検出（Canvas API実装・フォールバック用） ──
 function _gaussianBlur5(gray, w, h) {
   // 5×5 Gaussian kernel (sigma≈1.4), 重みの和=273
   const k = [1,4,7,4,1, 4,16,26,16,4, 7,26,41,26,7, 4,16,26,16,4, 1,4,7,4,1];
@@ -1079,7 +1095,7 @@ function _sobelEdges(gray, w, h) {
   return out;
 }
 
-async function autoDetectDocumentCorners() {
+async function _autoDetectWithCanvasAPI() {
   if (!workingCanvas) return null;
 
   // 処理用ダウンサンプル（最大400px）
@@ -1163,6 +1179,132 @@ async function autoDetectDocumentCorners() {
       y: Math.max(CLAMP, Math.min(canvas.height - CLAMP, cy)),
     };
   });
+}
+
+// ── 用紙自動検出（OpenCV.js実装） ──
+async function _autoDetectWithOpenCV() {
+  if (!workingCanvas || !cvReady) return null;
+
+  // ダウンサンプル（最大800px）
+  const MAX_SIZE = 800;
+  const dsScale = Math.min(MAX_SIZE / workingCanvas.width, MAX_SIZE / workingCanvas.height, 1);
+  const sw = Math.floor(workingCanvas.width * dsScale);
+  const sh = Math.floor(workingCanvas.height * dsScale);
+
+  const off = document.createElement('canvas');
+  off.width = sw; off.height = sh;
+  off.getContext('2d').drawImage(workingCanvas, 0, 0, sw, sh);
+
+  let src, gray, blurred, edges, contours, hierarchy;
+  try {
+    // 1. imread（CanvasからMat生成）
+    src = cv.imread(off);
+
+    // 2. グレースケール変換
+    gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+    // 3. ガウシアンぼかし
+    blurred = new cv.Mat();
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+
+    // 4. Cannyエッジ検出
+    edges = new cv.Mat();
+    cv.Canny(blurred, edges, 75, 200);
+
+    // 5. 輪郭検出
+    contours = new cv.MatVector();
+    hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    // 6. 最大面積の四角形輪郭を選択
+    let bestContour = null;
+    let bestArea = 0;
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const peri = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+      cnt.delete();
+      if (approx.rows === 4 && area > bestArea) {
+        if (bestContour) bestContour.delete();
+        bestContour = approx;
+        bestArea = area;
+      } else {
+        approx.delete();
+      }
+    }
+
+    if (!bestContour) return null;
+
+    // 7. 4点を取得（approxPolyDP結果は data32S に格納）
+    const pts = [];
+    for (let i = 0; i < 4; i++) {
+      pts.push({ x: bestContour.data32S[i * 2], y: bestContour.data32S[i * 2 + 1] });
+    }
+    bestContour.delete();
+
+    // sortCorners()で左上/右上/右下/左下に整列
+    const sorted = sortCorners(pts);
+
+    // ダウンサンプル座標 → 表示キャンバス座標に変換
+    const toDisplay = perspImgRect.scale / dsScale;
+    const canvas = document.getElementById('perspective-canvas');
+
+    // デフォルト座標（各角のフォールバック用）
+    const { x: ix, y: iy, w: iw, h: ih } = perspImgRect;
+    const inset = 0.15;
+    const defaults = [
+      { x: ix + iw * inset,       y: iy + ih * inset },
+      { x: ix + iw * (1 - inset), y: iy + ih * inset },
+      { x: ix + iw * (1 - inset), y: iy + ih * (1 - inset) },
+      { x: ix + iw * inset,       y: iy + ih * (1 - inset) },
+    ];
+
+    // 範囲外の角はデフォルト値で補完（20pxクランプ）
+    const CLAMP = 20;
+    return sorted.map((p, i) => {
+      const cx = perspImgRect.x + p.x * toDisplay;
+      const cy = perspImgRect.y + p.y * toDisplay;
+      if (cx < CLAMP || cx > canvas.width  - CLAMP ||
+          cy < CLAMP || cy > canvas.height - CLAMP) {
+        return defaults[i];
+      }
+      return {
+        x: Math.max(CLAMP, Math.min(canvas.width  - CLAMP, cx)),
+        y: Math.max(CLAMP, Math.min(canvas.height - CLAMP, cy)),
+      };
+    });
+
+  } finally {
+    // Matオブジェクトを必ず解放（メモリリーク防止）
+    if (src)       src.delete();
+    if (gray)      gray.delete();
+    if (blurred)   blurred.delete();
+    if (edges)     edges.delete();
+    if (contours)  contours.delete();
+    if (hierarchy) hierarchy.delete();
+  }
+}
+
+// ── 自動検出ディスパッチャー ──
+// OpenCV.js 読み込み済みなら高精度版、未読み込みなら Canvas API版にフォールバック
+async function autoDetectDocumentCorners() {
+  if (!workingCanvas) return null;
+
+  // 描画ブロックを避けるため次フレームに委譲
+  await new Promise(r => setTimeout(r, 0));
+
+  if (cvReady) {
+    try {
+      return await _autoDetectWithOpenCV();
+    } catch (e) {
+      console.warn('OpenCV検出失敗、Canvas APIにフォールバック:', e);
+    }
+  }
+
+  return _autoDetectWithCanvasAPI();
 }
 
 function updateHandlePositions() {
