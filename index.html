@@ -1150,17 +1150,21 @@ async function _autoDetectWithCanvasAPI() {
 
   // 8. 各角を個別に検証：範囲外の角はデフォルト値で補完
   //    クランプ余白を20pxとし、ハンドルが必ず画面内に収まるよう制約
+  //    内部解像度ではなく実際の表示サイズ基準でクランプする
   const CLAMP = 20;
+  const dispRect = canvas.getBoundingClientRect();
+  const dispW = dispRect.width;
+  const dispH = dispRect.height;
   return [tl, tr, br, bl].map((p, i) => {
     const cx = perspImgRect.x + p.x * toDisplay;
     const cy = perspImgRect.y + p.y * toDisplay;
-    if (cx < CLAMP || cx > canvas.width  - CLAMP ||
-        cy < CLAMP || cy > canvas.height - CLAMP) {
+    if (cx < CLAMP || cx > dispW - CLAMP ||
+        cy < CLAMP || cy > dispH - CLAMP) {
       return defaults[i];
     }
     return {
-      x: Math.max(CLAMP, Math.min(canvas.width  - CLAMP, cx)),
-      y: Math.max(CLAMP, Math.min(canvas.height - CLAMP, cy)),
+      x: Math.max(CLAMP, Math.min(dispW - CLAMP, cx)),
+      y: Math.max(CLAMP, Math.min(dispH - CLAMP, cy)),
     };
   });
 }
