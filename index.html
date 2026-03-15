@@ -1180,11 +1180,10 @@ function updateHandlePositions() {
 }
 
 function moveCorner(idx, touchX, touchY) {
-  const canvas = document.getElementById('perspective-canvas');
   // タッチ位置からオフセット分を引いた位置が実際の角
   perspCorners[idx] = {
-    x: Math.max(0, Math.min(canvas.width,  touchX - HANDLE_OFFSETS[idx].x)),
-    y: Math.max(0, Math.min(canvas.height, touchY - HANDLE_OFFSETS[idx].y)),
+    x: touchX - HANDLE_OFFSETS[idx].x,
+    y: touchY - HANDLE_OFFSETS[idx].y,
   };
   updateHandlePositions();
   redrawPerspView();
