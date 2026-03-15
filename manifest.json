@@ -1,6 +1,6 @@
 {
   "name": "スキャンかんたんPDF",
-  "short_name": "スキャンかんたんPDF",
+  "short_name": "おてがるPDF",
   "description": "書類や記事をかんたんにスキャンしてPDF化できるアプリ",
   "start_url": "./",
   "display": "standalone",
