@@ -1122,6 +1122,7 @@ async function autoDetectDocumentCorners() {
     }
   }
 
+  // エッジ点が少なすぎる場合はデフォルトに完全フォールバック
   if (edgePoints.length < 80) return null;
 
   // 5. 対角方向で四隅の代表点を探索（左上/右上/右下/左下）
@@ -1135,25 +1136,33 @@ async function autoDetectDocumentCorners() {
 
   // 6. ダウンサンプル座標 → 表示キャンバス座標に変換
   const toDisplay = perspImgRect.scale / dsScale;
-  const corners = [tl, tr, br, bl].map(p => ({
-    x: perspImgRect.x + p.x * toDisplay,
-    y: perspImgRect.y + p.y * toDisplay,
-  }));
-
-  // 7. 面積チェック：imgRect面積の5%未満は無効
-  let area = 0;
-  for (let i = 0; i < 4; i++) {
-    const j = (i + 1) % 4;
-    area += corners[i].x * corners[j].y - corners[j].x * corners[i].y;
-  }
-  if (Math.abs(area) / 2 < perspImgRect.w * perspImgRect.h * 0.05) return null;
-
-  // 8. 表示キャンバスの範囲にクランプ
   const canvas = document.getElementById('perspective-canvas');
-  return corners.map(p => ({
-    x: Math.max(0, Math.min(canvas.width,  p.x)),
-    y: Math.max(0, Math.min(canvas.height, p.y)),
-  }));
+
+  // 7. デフォルト座標（各角のフォールバック用）
+  const { x: ix, y: iy, w: iw, h: ih } = perspImgRect;
+  const inset = 0.15;
+  const defaults = [
+    { x: ix + iw * inset,       y: iy + ih * inset },
+    { x: ix + iw * (1 - inset), y: iy + ih * inset },
+    { x: ix + iw * (1 - inset), y: iy + ih * (1 - inset) },
+    { x: ix + iw * inset,       y: iy + ih * (1 - inset) },
+  ];
+
+  // 8. 各角を個別に検証：範囲外の角はデフォルト値で補完
+  //    クランプ余白を20pxとし、ハンドルが必ず画面内に収まるよう制約
+  const CLAMP = 20;
+  return [tl, tr, br, bl].map((p, i) => {
+    const cx = perspImgRect.x + p.x * toDisplay;
+    const cy = perspImgRect.y + p.y * toDisplay;
+    if (cx < CLAMP || cx > canvas.width  - CLAMP ||
+        cy < CLAMP || cy > canvas.height - CLAMP) {
+      return defaults[i];
+    }
+    return {
+      x: Math.max(CLAMP, Math.min(canvas.width  - CLAMP, cx)),
+      y: Math.max(CLAMP, Math.min(canvas.height - CLAMP, cy)),
+    };
+  });
 }
 
 function updateHandlePositions() {
