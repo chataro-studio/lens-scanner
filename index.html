@@ -273,6 +273,24 @@
       border: 1px solid var(--border); border-radius: 14px; font-size: 15px; cursor: pointer;
     }
 
+    /* ── 画像フォーマット選択モーダル ── */
+    #img-format-modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45); z-index: 800;
+      align-items: flex-end; justify-content: center;
+    }
+    #img-format-modal-overlay.show { display: flex; }
+    #img-format-modal {
+      background: var(--card); border-radius: 22px 22px 0 0;
+      padding: 16px 20px calc(28px + env(safe-area-inset-bottom));
+      width: 100%; max-width: 480px;
+    }
+    .fmt-btn {
+      flex: 1; padding: 16px; border: none; border-radius: 12px;
+      font-size: 16px; font-weight: 700; cursor: pointer;
+      background: var(--blue); color: #fff;
+    }
+
     /* ── PDF保存モーダル ── */
     #save-modal-overlay {
       display: none; position: fixed; inset: 0;
@@ -501,10 +519,25 @@
     </div>
   </div>
 
+  <button class="dl-btn" onclick="showImgFormatModal()">
+    📷 画像として保存
+  </button>
   <button class="dl-btn" onclick="downloadPdf()">
     📄 PDFを保存する
   </button>
   <button class="restart-btn" onclick="goHome()">最初からやり直す</button>
+</div>
+
+<!-- ■ 画像フォーマット選択モーダル -->
+<div id="img-format-modal-overlay" onclick="closeImgFormatModal(event)">
+  <div id="img-format-modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">📷 保存形式を選択</div>
+    <div style="display:flex; gap:12px; margin-top:16px;">
+      <button class="fmt-btn" onclick="downloadImage('jpeg')">JPEG</button>
+      <button class="fmt-btn" onclick="downloadImage('png')">PNG</button>
+    </div>
+  </div>
 </div>
 
 <!-- ■ PDF保存ガイドモーダル -->
@@ -1526,6 +1559,56 @@ async function downloadPdf() {
   });
 }
 
+function showImgFormatModal() {
+  if (!correctedCanvas) return;
+  document.getElementById('img-format-modal-overlay').classList.add('show');
+}
+
+function closeImgFormatModal(e) {
+  if (e && e.target !== document.getElementById('img-format-modal-overlay')) return;
+  document.getElementById('img-format-modal-overlay').classList.remove('show');
+}
+
+async function downloadImage(fmt) {
+  document.getElementById('img-format-modal-overlay').classList.remove('show');
+  await runExclusive(async () => {
+    if (!correctedCanvas) return;
+    const mimeType = fmt === 'png' ? 'image/png' : 'image/jpeg';
+    const quality  = fmt === 'png' ? undefined : 0.92;
+    const ext      = fmt === 'png' ? 'png' : 'jpg';
+    const fname    = getNextFilename(ext);
+
+    showLoading('画像を生成中...');
+    await new Promise(r => setTimeout(r, 50));
+
+    try {
+      const dataUrl = quality !== undefined
+        ? correctedCanvas.toDataURL(mimeType, quality)
+        : correctedCanvas.toDataURL(mimeType);
+
+      hideLoading();
+
+      // Blob化
+      const res  = await fetch(dataUrl);
+      const blob = await res.blob();
+      const file = new File([blob], fname, { type: mimeType });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: fname });
+      } else {
+        const url = URL.createObjectURL(blob);
+        triggerDownload(url, fname);
+        showToast('画像を保存しました ✓');
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      }
+    } catch (err) {
+      hideLoading();
+      showToast('エラー: ' + err.message);
+      console.error(err);
+    }
+  });
+}
+
 function openPdfUrl() {
   if (!pendingPdfUrl) return;
   document.getElementById('save-modal-overlay').classList.remove('show');
@@ -1552,14 +1635,14 @@ function closeSaveModal(e) {
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 
-function getNextFilename() {
+function getNextFilename(ext = 'pdf') {
   const d = new Date();
   const dateStr = `${d.getFullYear()}${pad2(d.getMonth()+1)}${pad2(d.getDate())}`;
   let stored = {};
   try { stored = JSON.parse(localStorage.getItem('scanCounter') || '{}'); } catch(e) {}
   const counter = stored.date === dateStr ? (stored.counter || 0) + 1 : 1;
   localStorage.setItem('scanCounter', JSON.stringify({ date: dateStr, counter }));
-  return `scan_${dateStr}_${String(counter).padStart(4, '0')}.pdf`;
+  return `scan_${dateStr}_${String(counter).padStart(4, '0')}.${ext}`;
 }
 
 // ===================================================
