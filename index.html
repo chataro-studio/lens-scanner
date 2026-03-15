@@ -900,6 +900,14 @@ function initPerspective(source) {
       for (let i = 0; i < 4; i++) {
         document.getElementById('ch-' + i).classList.add('visible');
       }
+      // 用紙自動検出（非同期・描画をブロックしない）
+      autoDetectDocumentCorners().then(detected => {
+        if (detected) {
+          perspCorners = detected;
+          updateHandlePositions();
+          redrawPerspView();
+        }
+      });
     });
   }).catch(err => {
     showToast(err.message);
@@ -1033,6 +1041,119 @@ function initDefaultCorners() {
     { x: x + w * (1 - inset), y: y + h * (1 - inset) },
     { x: x + w * inset,       y: y + h * (1 - inset) },
   ];
+}
+
+// ── 用紙自動検出（Canvas API実装） ──
+function _gaussianBlur5(gray, w, h) {
+  // 5×5 Gaussian kernel (sigma≈1.4), 重みの和=273
+  const k = [1,4,7,4,1, 4,16,26,16,4, 7,26,41,26,7, 4,16,26,16,4, 1,4,7,4,1];
+  const out = new Uint8Array(w * h);
+  for (let y = 2; y < h - 2; y++) {
+    for (let x = 2; x < w - 2; x++) {
+      let s = 0;
+      for (let ky = -2; ky <= 2; ky++) {
+        for (let kx = -2; kx <= 2; kx++) {
+          s += gray[(y + ky) * w + (x + kx)] * k[(ky + 2) * 5 + (kx + 2)];
+        }
+      }
+      out[y * w + x] = s / 273;
+    }
+  }
+  return out;
+}
+
+function _sobelEdges(gray, w, h) {
+  const out = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const gx =
+        -gray[(y-1)*w+(x-1)] + gray[(y-1)*w+(x+1)]
+        - 2*gray[y*w+(x-1)] + 2*gray[y*w+(x+1)]
+        - gray[(y+1)*w+(x-1)] + gray[(y+1)*w+(x+1)];
+      const gy =
+        -gray[(y-1)*w+(x-1)] - 2*gray[(y-1)*w+x] - gray[(y-1)*w+(x+1)]
+        + gray[(y+1)*w+(x-1)] + 2*gray[(y+1)*w+x] + gray[(y+1)*w+(x+1)];
+      out[y * w + x] = Math.sqrt(gx * gx + gy * gy);
+    }
+  }
+  return out;
+}
+
+async function autoDetectDocumentCorners() {
+  if (!workingCanvas) return null;
+
+  // 処理用ダウンサンプル（最大400px）
+  const MAX_SIZE = 400;
+  const dsScale = Math.min(MAX_SIZE / workingCanvas.width, MAX_SIZE / workingCanvas.height, 1);
+  const sw = Math.floor(workingCanvas.width * dsScale);
+  const sh = Math.floor(workingCanvas.height * dsScale);
+
+  // 描画ブロックを避けるため次フレームに委譲
+  await new Promise(r => setTimeout(r, 0));
+
+  const off = document.createElement('canvas');
+  off.width = sw; off.height = sh;
+  const octx = off.getContext('2d');
+  octx.drawImage(workingCanvas, 0, 0, sw, sh);
+  const d = octx.getImageData(0, 0, sw, sh).data;
+
+  // 1. グレースケール変換
+  const gray = new Uint8Array(sw * sh);
+  for (let i = 0; i < sw * sh; i++) {
+    gray[i] = 0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2];
+  }
+
+  // 2. ガウシアンぼかし（ノイズ除去）
+  const blurred = _gaussianBlur5(gray, sw, sh);
+
+  // 3. Sobelエッジ検出
+  const edges = _sobelEdges(blurred, sw, sh);
+
+  // 4. 最大値の15%を閾値としてエッジ点を収集
+  let maxE = 0;
+  for (let i = 0; i < edges.length; i++) if (edges[i] > maxE) maxE = edges[i];
+  const threshold = maxE * 0.15;
+
+  const margin = 3;
+  const edgePoints = [];
+  for (let y = margin; y < sh - margin; y++) {
+    for (let x = margin; x < sw - margin; x++) {
+      if (edges[y * sw + x] > threshold) edgePoints.push({x, y});
+    }
+  }
+
+  if (edgePoints.length < 80) return null;
+
+  // 5. 対角方向で四隅の代表点を探索（左上/右上/右下/左下）
+  let tl = edgePoints[0], tr = edgePoints[0], br = edgePoints[0], bl = edgePoints[0];
+  for (const p of edgePoints) {
+    if (p.x + p.y < tl.x + tl.y) tl = p;
+    if (p.x - p.y > tr.x - tr.y) tr = p;
+    if (p.x + p.y > br.x + br.y) br = p;
+    if (p.y - p.x > bl.y - bl.x) bl = p;
+  }
+
+  // 6. ダウンサンプル座標 → 表示キャンバス座標に変換
+  const toDisplay = perspImgRect.scale / dsScale;
+  const corners = [tl, tr, br, bl].map(p => ({
+    x: perspImgRect.x + p.x * toDisplay,
+    y: perspImgRect.y + p.y * toDisplay,
+  }));
+
+  // 7. 面積チェック：imgRect面積の5%未満は無効
+  let area = 0;
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    area += corners[i].x * corners[j].y - corners[j].x * corners[i].y;
+  }
+  if (Math.abs(area) / 2 < perspImgRect.w * perspImgRect.h * 0.05) return null;
+
+  // 8. 表示キャンバスの範囲にクランプ
+  const canvas = document.getElementById('perspective-canvas');
+  return corners.map(p => ({
+    x: Math.max(0, Math.min(canvas.width,  p.x)),
+    y: Math.max(0, Math.min(canvas.height, p.y)),
+  }));
 }
 
 function updateHandlePositions() {
